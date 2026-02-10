@@ -208,19 +208,22 @@ if stats is None:
 
 
 def plot_pos(pos: np.ndarray, time: np.ndarray, rchi2: float, v_fit: float, v_int: float, v_err: float, pt: float, track_num: int):
-    if not np.isfinite(v_fit) or not np.isfinite(v_int):
-        print(f"Track {track_num} is NaN")
-        return
     
     fig, ax = plt.subplots()
     
     pos_line = linearfunc([v_fit, v_int], time)
     
     ax.scatter(time, pos, color="black", label="BIB data points")
-    ax.plot(time, pos_line, label=f"Best fit v = {v_fit:.1f} mm/ns")
+    ax.plot(time, pos_line, label=f"Best fit v = {v_fit:.1f} ± {v_err:.1f} mm/ns")
+
+    if np.isfinite(v_err):
+        pos_up = linearfunc([v_fit + v_err, v_int], time)
+        pos_dn = linearfunc([v_fit - v_err, v_int], time)
+        ax.fill_between(time, pos_dn, pos_up, alpha=0.2)
     
     ax.set_xlabel("Time (ns)")
     ax.set_ylabel("Position (mm)")
+    ax.set_title(f"Reconstructed Track #{track_num}")
 
     ax.text(
         0.05, 0.95,
@@ -237,6 +240,8 @@ def plot_pos(pos: np.ndarray, time: np.ndarray, rchi2: float, v_fit: float, v_in
     )
 
     ax.legend(fontsize=9, frameon=False, loc="upper right")
+    ax.set_xlim(0, 8)
+    ax.set_ylim(0, 2000)
 
     pdf.savefig(fig)
     plt.close(fig)
@@ -244,6 +249,7 @@ def plot_pos(pos: np.ndarray, time: np.ndarray, rchi2: float, v_fit: float, v_in
 #print(stats["position"])
 
 nan_count = 0
+# small_v = 0
 
 with PdfPages("pos_plot.pdf") as pdf:
     for i in tqdm(range(500)):
@@ -264,4 +270,5 @@ with PdfPages("pos_plot.pdf") as pdf:
     print("Saved plots to pos_plot.pdf")
 
 print(f"Number of tracks with NaN fit: {nan_count}")
+# print(f"Number of tracks with v < 250 mm/ns: {small_v}")
 
