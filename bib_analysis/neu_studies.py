@@ -20,11 +20,11 @@ from pyLCIO import UTIL, EVENT
 import ROOT
 
 dir = "/ospool/uc-shared/project/futurecolliders/wandriscok/reco/nu_background/"
-windows = ["loose"]
+#windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
-#windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/nu_bkg_stats.pkl")
+windows = ["loose", "tight"]
+CACHE = pathlib.Path("nu_bkg_stats.pkl")
 plot_path = "/scratch/wandriscok/kate_mucoll_script/analysis.pdf"
 file_ranges = {
     "10_bib": (0, 2500),
@@ -72,7 +72,7 @@ def residual(p, function_type, times, pos, spatial_unc):
     # weighted residuals
     return (function_type(p, times) - pos) / spatial_unc
 
-guess_velo = 180
+guess_velo = 290
 def reco_velo(function_type, times, pos, spatial_unc):
     x = np.asarray(times, dtype=float)
     y = np.asarray(pos, dtype=float)
@@ -91,7 +91,15 @@ def reco_velo(function_type, times, pos, spatial_unc):
         args=(function_type, x, y, s),
         jac='2-point'
     )
-    p = fit.x  
+    p = fit.x 
+
+    model = function_type(p, x)
+    residuals = (model - y)
+    rms = np.sqrt(np.mean(residuals**2))
+
+    n_outliers = np.sum(np.abs(residuals) > 3 * s)
+    frac_outliers = n_outliers / len(residuals)
+
     try:
         J = fit.jac
         dof = max(1, x.size - p.size)
@@ -112,28 +120,31 @@ if (not rebuild) and os.path.exists(CACHE):
 
 if stats is None:
     stats = {
-        "chi2_values": [],
-        "data": {window: {
+        window: {
             req: {
                 "10_bib": {
                     "pT": [],
                     "hits": [],
                     "velocity": [],
                     "mass": [],
-                    "beta": []
+                    "beta": [],
+                    "d0": [],
+                    "z0": []
                 },
                 "bib": {
                     "pT": [],
                     "hits": [],
                     "velocity": [],
                     "mass": [],
-                    "beta": []
+                    "beta": [],
+                    "d0": [],
+                    "z0": []
+                }
             }
+            for req in track_req_names
         }
-        for req in track_req_names
+        for window in windows
     }
-    for window in windows
-    }}
     
     reader = pyLCIO.IOIMPL.LCFactory.getInstance().createLCReader()
     
@@ -142,6 +153,7 @@ if stats is None:
         for option in bib_options:
             total_track = 0
             track_pass_chi2 = 0
+            track_pass_eta = 0
             track_vb = 0
             track_ib = 0
             track_ob = 0
@@ -240,6 +252,13 @@ if stats is None:
 
                             pZ = reco_pT * track.getTanLambda()
                             p_total = np.sqrt(reco_pT**2 + pZ**2)
+
+                            tan_lambda = track.getTanLambda()
+                            eta = np.arcsinh(tan_lambda)
+                            if abs(eta) > 0.8:
+                                continue
+
+                            track_pass_eta += 1
                             
                             beta = v_fit / speedoflight
 
@@ -258,26 +277,36 @@ if stats is None:
                             
                             total_hits = vb_hits + ib_hits + ob_hits
 
+                            track_state = track.getTrackStates()[0]
+                            d0 = track_state.getD0()
+                            z0 = track_state.getZ0()
+
                             if vb_hits >= 3:
-                                stats["data"][window]["vb"][option]["pT"].append(reco_pT)
-                                stats["data"][window]["vb"][option]["hits"].append(total_hits)
-                                stats["data"][window]["vb"][option]["velocity"].append(v_fit)
-                                stats["data"][window]["vb"][option]["mass"].append(mass)
-                                stats["data"][window]["vb"][option]["beta"].append(beta)
+                                stats[window]["vb"][option]["pT"].append(reco_pT)
+                                stats[window]["vb"][option]["hits"].append(total_hits)
+                                stats[window]["vb"][option]["velocity"].append(v_fit)
+                                stats[window]["vb"][option]["mass"].append(mass)
+                                stats[window]["vb"][option]["beta"].append(beta)
+                                stats[window]["vb"][option]["d0"].append(d0)
+                                stats[window]["vb"][option]["z0"].append(z0)
                                 track_vb += 1
                             if vb_hits >= 3 and ib_hits >= 2:
-                                stats["data"][window]["ib"][option]["pT"].append(reco_pT)
-                                stats["data"][window]["ib"][option]["hits"].append(total_hits)
-                                stats["data"][window]["ib"][option]["velocity"].append(v_fit)
-                                stats["data"][window]["ib"][option]["mass"].append(mass)
-                                stats["data"][window]["ib"][option]["beta"].append(beta)
+                                stats[window]["ib"][option]["pT"].append(reco_pT)
+                                stats[window]["ib"][option]["hits"].append(total_hits)
+                                stats[window]["ib"][option]["velocity"].append(v_fit)
+                                stats[window]["ib"][option]["mass"].append(mass)
+                                stats[window]["ib"][option]["beta"].append(beta)
+                                stats[window]["ib"][option]["d0"].append(d0)
+                                stats[window]["ib"][option]["z0"].append(z0)
                                 track_ib += 1
                             if vb_hits >= 3 and ib_hits >= 2 and ob_hits >= 2:
-                                stats["data"][window]["ob"][option]["pT"].append(reco_pT)
-                                stats["data"][window]["ob"][option]["hits"].append(total_hits)
-                                stats["data"][window]["ob"][option]["velocity"].append(v_fit)
-                                stats["data"][window]["ob"][option]["mass"].append(mass)
-                                stats["data"][window]["ob"][option]["beta"].append(beta)
+                                stats[window]["ob"][option]["pT"].append(reco_pT)
+                                stats[window]["ob"][option]["hits"].append(total_hits)
+                                stats[window]["ob"][option]["velocity"].append(v_fit)
+                                stats[window]["ob"][option]["mass"].append(mass)
+                                stats[window]["ob"][option]["beta"].append(beta)
+                                stats[window]["ob"][option]["d0"].append(d0)
+                                stats[window]["ob"][option]["z0"].append(z0)
                                 track_ob += 1
 
                 except Exception as e:
@@ -287,18 +316,19 @@ if stats is None:
 
             print(f"Finished {window} / {option}")
 
-            vb_percent = (track_vb / track_pass_chi2) * 100
-            ib_percent = (track_ib / track_pass_chi2) * 100
-            ob_percent = (track_ob / track_pass_chi2) * 100
-            overc_percent = (over_c / track_pass_chi2) * 100
+            vb_percent = (track_vb / track_pass_eta) * 100
+            ib_percent = (track_ib / track_pass_eta) * 100
+            ob_percent = (track_ob / track_pass_eta) * 100
+            overc_percent = (over_c / track_pass_eta) * 100
 
             print(f"{window} window, {option} option stats:")
             print(f"Number of total tracks: {total_track}")
             print(f"Number of tracks passing chi2: {track_pass_chi2}")
-            print(f"Vertex cut: {track_vb} / {track_pass_chi2} -> {vb_percent:.2f}%")
-            print(f"Inner cut: {track_ib} / {track_pass_chi2} -> {ib_percent:.2f}%")
-            print(f"Outer cut: {track_ob} / {track_pass_chi2} -> {ob_percent:.2f}%")
-            print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing rchi2")
+            print(f"Number of tracks passing eta: {track_pass_eta}")
+            print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
+            print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
+            print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
+            print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta")
     
 
     #print(stats)
@@ -313,7 +343,9 @@ title_map = {
         "velocity": "Reconstructed Velocity",
         "pT": "Reconstructed pT",
         "mass": "Reconstructed Mass",
-        "beta": "Beta Values [v/c]"
+        "beta": "Beta Values [v/c]",
+        "d0": "d0 [add units here]",
+        "z0": "z0 [add units here]"
     }
 
 xlabel_map = {
@@ -321,7 +353,9 @@ xlabel_map = {
         "velocity": "Velocity [mm/ns]",
         "pT": "pT [GeV]",
         "mass": "Reconstructed mass [GeV]",
-        "beta": "Beta"
+        "beta": "Beta",
+        "d0": "d0 [add units here]",
+        "z0": "z0 [add units here]"
     }
 
 bib_map = {
@@ -332,7 +366,7 @@ bib_map = {
 
 def get_feature_arrays(feature, window, option):
     return [
-        np.asarray(stats["data"][window][req][option][feature], float)
+        np.asarray(stats[window][req][option][feature], float)
         for req in track_req_names
     ]
 
@@ -341,8 +375,8 @@ def get_high_pt_feature(feature, window, option, pt_cut=800):
     cut_feature = []
 
     for req in track_req_names:
-        pT = np.asarray(stats["data"][window][req][option]["pT"], float)
-        values = np.asarray(stats["data"][window][req][option][feature], float)
+        pT = np.asarray(stats[window][req][option]["pT"], float)
+        values = np.asarray(stats[window][req][option][feature], float)
     
         cut = pT > pt_cut
         cut_feature.append(values[cut])
@@ -372,7 +406,7 @@ def plot_feature(feature, window, option, x_lim=None):
         ]
 
     for ax, arr, title in zip(axes, feature_arrays, titles):
-        print(arr)
+        #print(arr)
         
         if arr.size != 0:
             weights = np.full(arr.size, 100.0 / arr.size)
@@ -415,7 +449,7 @@ def plot_feature(feature, window, option, x_lim=None):
 
     axes[0].set_ylabel("Normalized Counts (%)", fontsize=12)
 
-    fig.suptitle(f"{title_map.get(feature, feature)}  |  bkg: {window} window, {bib_name[option]}")
+    fig.suptitle(f"{title_map.get(feature, feature)} - added eta cut |  bkg: {window} window, {bib_name[option]}")
 
     # ax.tick_params(axis="both", which="major", labelsize=10, length=6, width=1.5)
     # ax.tick_params(axis="both", which="minor", labelsize=10, length=4, width=1.0)
@@ -507,8 +541,8 @@ def heat_map(window, option):
     ]
 
     for ax, req, title in zip(axes, track_req_names, titles):
-        velo = np.asarray(stats["data"][window][req][option]["velocity"], float)
-        pT = np.asarray(stats["data"][window][req][option]["pT"], float)
+        velo = np.asarray(stats[window][req][option]["velocity"], float)
+        pT = np.asarray(stats[window][req][option]["pT"], float)
 
         m = np.isfinite(velo) & np.isfinite(pT)
         velo = velo[m]
@@ -556,8 +590,10 @@ with PdfPages('analysis.pdf') as pdf:
             plot_feature("pT", window, option, (0,120))
             plot_feature("hits", window, option, (0, 18))
             plot_feature("velocity", window, option, (-200, 500))
-            plot_feature("mass", window, option, (0, 500))
+            plot_feature("mass", window, option, (0, 200))
             plot_feature("beta", window, option, (0, 1.25))
+            plot_feature("d0", window, option, (-5, 5))
+            plot_feature("z0", window, option, (-10, 10))
     print(f"Saved plots to analysis.pdf") 
 
 with PdfPages('heatmap.pdf') as pdf:
@@ -576,4 +612,6 @@ with PdfPages('highpT.pdf') as pdf:
             plot_high_pt_feature("hits", window, option, (0,18))
             plot_high_pt_feature("mass", window, option, (0,100000))
             plot_high_pt_feature("beta", window, option, (0,1.25))
+            plot_high_pt_feature("d0", window, option, (-5,5))
+            plot_high_pt_feature("z0", window, option, (-10,10))
     print(f"Saved plots to highpT.pdf")
