@@ -36,7 +36,7 @@ bib_options = ["10_bib"]
 CACHE = pathlib.Path("cache/nu_bkg_event.pkl")
 plot_path = "/scratch/wandriscok/kate_mucoll_script/analysis.pdf"
 file_ranges = {
-    "10_bib": (0, 800),
+    "10_bib": (0, 1800),
     "bib": (4, 8)
 }
 Bfield = 3.57
@@ -158,6 +158,7 @@ if stats is None:
         track_ib = 0
         track_ob = 0
         track_pass_chi2 = 0
+        track_pass_eta = 0
         over_c = 0
         print(f"Analyzing {window} window...")
         for option in bib_options:
@@ -269,6 +270,14 @@ if stats is None:
 
                         pZ = reco_pT * track.getTanLambda()
                         p_total = np.sqrt(reco_pT**2 + pZ**2)
+
+                        tan_lambda = track.getTanLambda()
+                        eta = np.arcsinh(tan_lambda)
+                        if abs(eta) > 0.8:
+                            continue
+
+                        track_pass_eta += 1
+
                         beta_for_mass = v_fit / speedoflight 
                         
                         if np.isfinite(reco_pT) and np.isfinite(beta_for_mass) and (0 < beta_for_mass <= 1):
@@ -319,18 +328,20 @@ if stats is None:
 
         print(f"Finished {window}")
 
-        vb_percent = (track_vb / track_pass_chi2) * 100
-        ib_percent = (track_ib / track_pass_chi2) * 100
-        ob_percent = (track_ob / track_pass_chi2) * 100
-        overc_percent = (over_c / track_pass_chi2) * 100
+        eta_percent = (track_pass_eta / track_pass_chi2) * 100
+        vb_percent = (track_vb / track_pass_eta) * 100
+        ib_percent = (track_ib / track_pass_eta) * 100
+        ob_percent = (track_ob / track_pass_eta) * 100
+        overc_percent = (over_c / track_pass_eta) * 100
 
         print(f"{window} window stats:")
         print(f"Number of total tracks: {total_tracks}")
         print(f"Number of tracks passing chi2: {track_pass_chi2}")
-        print(f"Vertex cut: {track_vb} / {track_pass_chi2} -> {vb_percent:.2f}%")
-        print(f"Inner cut: {track_ib} / {track_pass_chi2} -> {ib_percent:.2f}%")
-        print(f"Outer cut: {track_ob} / {track_pass_chi2} -> {ob_percent:.2f}%")
-        print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing rchi2")
+        print(f"Number of tracks passing eta cut: {track_pass_eta} / {track_pass_chi2} -> {eta_percent:.2f}%")
+        print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
+        print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
+        print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
+        print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta")
 
     
 print(stats)
@@ -484,7 +495,7 @@ print_bib_track_summary(stats, windows, bib_options)
 print_bib_track_cut_summary(
     stats,
     windows=["loose"],
-    options=["bib"],
+    options=["10_bib"],
     reqs=["vb", "ib", "ob"]
 )
 
