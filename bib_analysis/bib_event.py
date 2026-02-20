@@ -20,9 +20,9 @@ from pyLCIO import UTIL, EVENT
 import ROOT
 
 # DEFINING CUTS 
-PT_MIN   = 800.0
-MASS_MIN = 500.0
-BETA_MAX = 0.99
+PT_MIN   = 0
+MASS_MIN = 0
+BETA_MAX = 1.0
 def pass_pt(t):   return np.isfinite(t["pT"])   and (t["pT"]   > PT_MIN)
 def pass_mass(t): return np.isfinite(t["mass"]) and (t["mass"] > MASS_MIN)
 def pass_beta(t): return np.isfinite(t["beta"]) and (t["beta"] < BETA_MAX)
@@ -33,7 +33,7 @@ windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/nu_bkg_event.pkl")
+CACHE = pathlib.Path("cache/bib_event_all.pkl")
 plot_path = "/scratch/wandriscok/kate_mucoll_script/analysis.pdf"
 file_ranges = {
     "10_bib": (0, 1800),
@@ -52,7 +52,8 @@ bib_name = {
     "bib": "100% BIB"
 }
 chi2_cut = 3
-track_req_names = ["vb", "ib", "ob"]
+#track_req_names = ["vb", "ib", "ob"]
+track_req_names = ["ob"]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--rebuild", action="store_true")
@@ -81,7 +82,42 @@ def residual(p, function_type, times, pos, spatial_unc):
     # weighted residuals
     return (function_type(p, times) - pos) / spatial_unc
 
-guess_velo = 180
+guess_velo = 299.8
+
+def fit_rms(p, function_type, times, pos, spatial_unc):
+    x = np.asarray(times, dtype=float)
+    y = np.asarray(pos, dtype=float)
+    s = np.asarray(spatial_unc, dtype=float)
+
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(s) & (s > 0)
+    x, y, s = x[m], y[m], s[m]
+    if x.size == 0:
+        return np.nan, np.nan
+
+    yhat = function_type(p, x)
+    r = yhat - y                
+    rms_unw = float(np.sqrt(np.mean(r*r)))
+    rw = r / s                  
+    rms_w = float(np.sqrt(np.mean(rw*rw)))
+    return rms_unw, rms_w
+
+def time_rms_from_fit(v, t, r, time_unc, b=0.0):
+    t = np.asarray(t, float)
+    r = np.asarray(r, float)
+    st = np.asarray(time_unc, float)
+
+    m = np.isfinite(t) & np.isfinite(r) & np.isfinite(st) & (st > 0)
+    t, r, st = t[m], r[m], st[m]
+    if t.size < 3 or (not np.isfinite(v)) or abs(v) < 1e-12:
+        return np.nan, np.nan
+
+    t_pred = (r - b) / v
+    dt = t - t_pred
+
+    uw_rms_t = float(np.sqrt(np.mean(dt * dt)))          
+    w_rms_t = float(np.sqrt(np.mean((dt / st) ** 2))) 
+    return uw_rms_t, w_rms_t
+
 def reco_velo(function_type, times, pos, spatial_unc):
     x = np.asarray(times, dtype=float)
     y = np.asarray(pos, dtype=float)
@@ -91,7 +127,7 @@ def reco_velo(function_type, times, pos, spatial_unc):
     x, y, s = x[m], y[m], s[m]
 
     if x.size < 3 or np.allclose(x, x.mean()):
-        return np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan
 
     p0 = np.array([guess_velo, 0.0])
 
@@ -108,10 +144,62 @@ def reco_velo(function_type, times, pos, spatial_unc):
         sigma2 = chi2 / dof
         cov = np.linalg.inv(J.T @ J) * sigma2
         v_err = float(np.sqrt(cov[0, 0]))
+        rms_unw, rms_w = fit_rms(p, function_type, x, y, s)
+
+    except Exception:
+        v_err = np.nan
+        rms_unw, rms_w = np.nan, np.nan
+
+    return float(p[0]), v_err, rms_unw, rms_w
+
+def linearfunc_no_intercept(v, x):
+    return v * x
+def residual_no_intercept(v, times, pos, spatial_unc, time_unc):
+    vv = float(np.atleast_1d(v)[0])
+    s_eff = np.sqrt(np.asarray(spatial_unc, float)**2 + (vv * np.asarray(time_unc, float))**2)
+    return (linearfunc_no_intercept(vv, times) - pos) / s_eff
+
+def reco_velo_no_intercept(times, pos, spatial_unc, time_unc):
+    x = np.asarray(times, dtype=float)
+    y = np.asarray(pos, dtype=float)
+    s = np.asarray(spatial_unc, dtype=float)
+    st = np.asarray(time_unc, dtype=float)
+
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(s) & (s > 0) & np.isfinite(st) & (st > 0)
+    x, y, s, st = x[m], y[m], s[m], st[m]
+
+    if x.size < 3 or np.allclose(x, x.mean()):
+        return np.nan, np.nan, np.nan, np.nan
+
+    v0 = np.array([guess_velo])
+
+    def residual0(v, times, pos, spatial_unc):
+        vv = float(np.atleast_1d(v)[0])
+        return (vv * times - pos) / spatial_unc
+
+    fit = optimize.least_squares(
+        residual0,
+        v0,
+        args=(x, y, s),
+        jac="2-point"
+    )
+
+    v = float(fit.x[0])
+
+    uw_rms_t, w_rms_t = time_rms_from_fit(v, x, y, st, b=0.0)
+
+    try:
+        r = (v * x - y)
+        J = fit.jac
+        dof = max(1, x.size - 1)
+        chi2 = np.sum((r / s) ** 2)
+        sigma2 = chi2 / dof
+        cov = np.linalg.inv(J.T @ J) * sigma2
+        v_err = float(np.sqrt(cov[0, 0]))
     except Exception:
         v_err = np.nan
 
-    return float(p[0]), v_err
+    return v, v_err, uw_rms_t, w_rms_t
 
 
 stats = None
@@ -123,30 +211,18 @@ if (not rebuild) and os.path.exists(CACHE):
 if stats is None:
     stats = {
         window: {
-            option: {
-                "n_events": 0,   # total processed events
-                "vb": {
-                    "n_total_tracks": [],
-                    "n_pass_pt": [],
-                    "n_pass_mass": [],
-                    "n_pass_beta": [],
-                    "n_pass_all": [],
-                },
-                "ib": {
-                    "n_total_tracks": [],
-                    "n_pass_pt": [],
-                    "n_pass_mass": [],
-                    "n_pass_beta": [],
-                    "n_pass_all": [],
-                },
-                "ob": {
-                    "n_total_tracks": [],
-                    "n_pass_pt": [],
-                    "n_pass_mass": [],
-                    "n_pass_beta": [],
-                    "n_pass_all": [],
-                },
-            } for option in bib_options
+            req: {
+                option: {
+                    "n_events": 0,   # total processed events
+                    "leading_mass": [], "subleading_mass": [],
+                    "leading_pT": [], "subleading_pT": [],
+                    "leading_beta": [], "subleading_beta": [],
+                    "leading_hits": [], "subleading_hits": [],
+                    "leading_d0": [], "subleading_d0": [],
+                    "leading_z0": [], "subleading_z0": [],
+                    "leading_w_rms": [], "subleading_w_rms": [],
+                } for option in bib_options
+            } for req in track_req_names
         } for window in windows
     }
 
@@ -157,12 +233,18 @@ if stats is None:
         track_vb = 0
         track_ib = 0
         track_ob = 0
-        track_pass_chi2 = 0
         track_pass_eta = 0
         over_c = 0
         print(f"Analyzing {window} window...")
         for option in bib_options:
             print(f"Analyzing {option}...")
+            leading_mass = []
+            sub_leading_mass = []
+            leading_mass_event = []
+            subleading_mass_event = []
+            # stats[window]["vb"][option]["leading_mass"] = []
+            # stats[window]["vb"][option]["subleading_mass"] = []
+
             start, stop = file_ranges[option]
             for ifile in tqdm(range(start, stop)): 
                 file_name = f"nu_background_reco{ifile}.slcio"
@@ -179,12 +261,12 @@ if stats is None:
                     continue
 
                 for event in reader:
-                    # tracks_by_req = {req: [] for req in track_req_names}
-                    # for req in track_req_names:
-                    #     stats[window][req][option]["n_events"] += 1
+                    tracks_by_req = {req: [] for req in track_req_names}
+                    for req in track_req_names:
+                        stats[window][req][option]["n_events"] += 1
 
-                    stats[window][option]["n_events"] += 1
-                    tracks_by_req = {"vb": [], "ib": [], "ob": []}
+                    # stats[window][option]["n_events"] += 1
+                    # tracks_by_req = {"vb": [], "ib": [], "ob": []}
 
                     all_collections = event.getCollectionNames() 
                     track_collection = event.getCollection("SiTracks") if "SiTracks" in all_collections else None 
@@ -209,8 +291,6 @@ if stats is None:
                         # reduced chi2 cut
                         if reduced_chi2 > chi2_cut:
                             continue
-
-                        track_pass_chi2 += 1
 
                         track_hits = track.getTrackerHits()
 
@@ -240,6 +320,7 @@ if stats is None:
                         track_times = []
                         track_pos = []
                         spatial_unc = []
+                        time_unc = []
 
                         for hit in track_hits:
                             decoder.setValue(int(hit.getCellID0()))
@@ -257,10 +338,12 @@ if stats is None:
 
                             if system in (1,2):
                                 spatial_unc.append(0.005)
+                                time_unc.append(0.03)
                             else:
                                 spatial_unc.append(0.007)
+                                time_unc.append(0.06)
                         
-                        v_fit, v_err = reco_velo(linearfunc, track_times, track_pos, spatial_unc) 
+                        v_fit, v_err, uw_rms, w_rms = reco_velo_no_intercept(track_times, track_pos, spatial_unc, time_unc) 
                         
                         beta = v_fit / speedoflight
 
@@ -287,11 +370,18 @@ if stats is None:
                         
                         total_hits = vb_hits + ib_hits + ob_hits
 
+                        track_state = track.getTrackStates()[0]
+                        d0 = track_state.getD0()
+                        z0 = track_state.getZ0()
+
                         track_info = {
                             "pT": float(reco_pT) if np.isfinite(reco_pT) else np.nan,
                             "beta": float(beta) if np.isfinite(beta) else np.nan,
                             "mass": float(mass) if np.isfinite(mass) else np.nan,
                             "hits": float(total_hits),
+                            "d0": float(d0) if np.isfinite(d0) else np.nan,
+                            "z0": float(z0) if np.isfinite(z0) else np.nan,
+                            "w_rms": float(w_rms) if np.isfinite(w_rms) else np.nan
                         } 
                         
                         if vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2:
@@ -299,36 +389,75 @@ if stats is None:
                             track_ob += 1
                                 
                         if vb_hits >= 3 and ib_hits >= 2:
-                            tracks_by_req["ib"].append(track_info)
+                            #tracks_by_req["ib"].append(track_info)
                             track_ib += 1
 
                         if vb_hits >= 3: 
-                            tracks_by_req["vb"].append(track_info)
+                            #tracks_by_req["vb"].append(track_info)
                             track_vb += 1
 
                         
-                    for req in ["vb", "ib", "ob"]:
+                    #for req in ["vb", "ib", "ob"]:
+                    for req in ["ob"]:
                         tracks = tracks_by_req[req]
 
-                        n_total = len(tracks)
-                        n_pt   = sum(pass_pt(t)   for t in tracks)
-                        n_mass = sum(pass_mass(t) for t in tracks)
-                        n_beta = sum(pass_beta(t) for t in tracks)
-                        n_all  = sum(pass_all(t)  for t in tracks)
+                        ## looking at things that are passing the cuts above
+                        # n_pt   = sum(1 for t in tracks if pass_pt(t))
+                        # n_mass = sum(1 for t in tracks if pass_mass(t))
+                        # n_beta = sum(1 for t in tracks if pass_beta(t))
+                        # n_all  = sum(1 for t in tracks if pass_all(t))
 
-                        d = stats[window][option][req]
+                        d = stats[window][req][option]
 
-                        d["n_total_tracks"].append(n_total)
-                        d["n_pass_pt"].append(n_pt)
-                        d["n_pass_mass"].append(n_mass)
-                        d["n_pass_beta"].append(n_beta)
-                        d["n_pass_all"].append(n_all)
+                        # d["n_pass_pt"].append(n_pt)
+                        # d["n_pass_mass"].append(n_mass)
+                        # d["n_pass_beta"].append(n_beta)
+                        # d["n_pass_all"].append(n_all)
+
+                        passing_all = [t for t in tracks if pass_all(t)]
+                        passing_all.sort(key=lambda t: t["mass"], reverse=True)
+
+                        if len(passing_all) >= 1:
+                            lead = passing_all[0]
+                            d["leading_mass"].append(lead["mass"])
+                            d["leading_pT"].append(lead["pT"])
+                            d["leading_beta"].append(lead["beta"])
+                            d["leading_hits"].append(lead["hits"])
+                            d["leading_d0"].append(lead["d0"])
+                            d["leading_z0"].append(lead["z0"])
+                            d["leading_w_rms"].append(lead["w_rms"])
+
+                        else:
+                            d["leading_mass"].append(float("nan"))
+                            d["leading_pT"].append(float("nan"))
+                            d["leading_beta"].append(float("nan"))
+                            d["leading_hits"].append(float("nan"))
+                            d["leading_d0"].append(float("nan"))
+                            d["leading_z0"].append(float("nan"))
+                            d["leading_w_rms"].append(float("nan"))
+
+                        if len(passing_all) >= 2:
+                            sub = passing_all[1]
+                            d["subleading_mass"].append(sub["mass"])
+                            d["subleading_pT"].append(sub["pT"])
+                            d["subleading_beta"].append(sub["beta"])
+                            d["subleading_hits"].append(sub["hits"])
+                            d["subleading_d0"].append(sub["d0"])
+                            d["subleading_z0"].append(sub["z0"])
+                            d["subleading_w_rms"].append(sub["w_rms"])
+                        else:
+                            d["subleading_mass"].append(float("nan"))
+                            d["subleading_pT"].append(float("nan"))
+                            d["subleading_beta"].append(float("nan"))
+                            d["subleading_hits"].append(float("nan"))
+                            d["subleading_d0"].append(float("nan"))
+                            d["subleading_z0"].append(float("nan"))
+                            d["subleading_w_rms"].append(float("nan"))
 
                 reader.close()
 
         print(f"Finished {window}")
 
-        eta_percent = (track_pass_eta / track_pass_chi2) * 100
         vb_percent = (track_vb / track_pass_eta) * 100
         ib_percent = (track_ib / track_pass_eta) * 100
         ob_percent = (track_ob / track_pass_eta) * 100
@@ -336,8 +465,7 @@ if stats is None:
 
         print(f"{window} window stats:")
         print(f"Number of total tracks: {total_tracks}")
-        print(f"Number of tracks passing chi2: {track_pass_chi2}")
-        print(f"Number of tracks passing eta cut: {track_pass_eta} / {track_pass_chi2} -> {eta_percent:.2f}%")
+        print(f"Number of tracks passing eta cut: {track_pass_eta}")
         print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
         print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
         print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
@@ -361,10 +489,6 @@ def print_bib_track_summary(stats, windows, bib_options):
             print(f"BIB Track Multiplicity Summary | window = {window} | option = {option}")
             print(sep)
 
-            N_events = stats[window][option]["n_events"]
-            print(f"Total processed events: {N_events}")
-            print(sep)
-
             header = (
                 "REQ | Tracks>=1      |  pT pass      |  Mass pass    |  Beta pass     |  All cuts"
             )
@@ -372,7 +496,11 @@ def print_bib_track_summary(stats, windows, bib_options):
             print(sep)
 
             for req in ["vb", "ib", "ob"]:
-                d = stats[window][option][req]
+                N_events = stats[window][req][option]["n_events"]
+                print(f"Total processed events: {N_events}")
+                print(sep)
+
+                d = stats[window][req][option]
 
                 def count_events(arr, min_tracks=1):
                     return sum(x >= min_tracks for x in arr)
@@ -425,8 +553,8 @@ def print_bib_track_cut_summary(stats, windows, options, reqs):
             print(sep)
 
             for req in reqs:
-                d = stats[window][option][req]
-                N_events = stats[window][option]["n_events"]
+                d = stats[window][req][option]
+                N_events = stats[window][req][option]["n_events"]
 
                 print(f"\nRequirement region: {req.upper()}  (Events = {N_events})")
 
@@ -460,7 +588,7 @@ def print_bib_cut_efficiencies(stats, windows, bib_options, track_reqs):
             print(sep)
 
             for req in track_reqs:
-                d = stats[window][option][req]
+                d = stats[window][req][option]
 
                 totals = np.array(d["n_total_tracks"])
                 pt     = np.array(d["n_pass_pt"])
@@ -489,99 +617,21 @@ def print_bib_cut_efficiencies(stats, windows, bib_options, track_reqs):
 
 
 
-print_bib_track_summary(stats, windows, bib_options)
+#print_bib_track_summary(stats, windows, bib_options)
 
 
-print_bib_track_cut_summary(
-    stats,
-    windows=["loose"],
-    options=["10_bib"],
-    reqs=["vb", "ib", "ob"]
-)
+#print_bib_track_cut_summary(
+#     stats,
+#     windows=["loose"],
+#     options=["10_bib"],
+#     reqs=["vb", "ib", "ob"]
+# )
 
-print_bib_cut_efficiencies(stats, windows, bib_options, ["vb", "ib", "ob"])
-
-
-
-
-# def plot_track_multiplicity(stats, window, option, pdf):
-#     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
-
-#     reqs = ["vb", "ib", "ob"]
-#     titles = ["≥3 VB hits", "≥3 VB & ≥2 IB", "≥3 VB & ≥2 IB & ≥2 OB"]
-
-#     N_events = stats[window][option]["n_events"]
-
-#     for ax, req, title in zip(axes, reqs, titles):
-#         arr = np.array(stats[window][option][req]["n_total_tracks"])
-
-#         if len(arr) == 0:
-#             continue
-
-#         # Percent of events normalization
-#         weights = np.ones_like(arr) * (100.0 / N_events)
-
-#         bins = np.arange(0, arr.max() + 2) - 0.5
-
-#         ax.hist(arr, bins=bins, weights=weights,
-#                 histtype="stepfilled", alpha=0.35,
-#                 edgecolor="black", linewidth=1.8)
-
-#         ax.set_title(title)
-#         ax.set_xlabel("Tracks per event")
-#         ax.grid(alpha=0.2)
-#         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-
-#     axes[0].set_ylabel("Events (%)")
-#     fig.suptitle(f"BIB Track Multiplicity | {window} window | {bib_name[option]}")
-
-#     fig.tight_layout()
-#     pdf.savefig(fig)
-#     plt.close(fig)
-
-
-# def plot_cut_multiplicity(stats, window, option, key, label, pdf):
-#     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
-
-#     reqs = ["vb", "ib", "ob"]
-#     titles = ["VB", "IB", "OB"]
-#     N_events = stats[window][option]["n_events"]
-
-#     for ax, req, title in zip(axes, reqs, titles):
-#         arr = np.array(stats[window][option][req][key])
-#         weights = np.ones_like(arr) * (100.0 / N_events)
-#         bins = np.arange(0, arr.max() + 2) - 0.5
-
-#         ax.hist(arr, bins=bins, weights=weights,
-#                 histtype="stepfilled", alpha=0.35,
-#                 edgecolor="black", linewidth=1.8)
-
-#         ax.set_title(f"{title} tracks")
-#         ax.set_xlabel("Tracks per event")
-#         ax.grid(alpha=0.2)
-#         ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-
-#     axes[0].set_ylabel("Events (%)")
-#     fig.suptitle(f"{label} Multiplicity | {window} | {bib_name[option]}")
-
-#     fig.tight_layout()
-#     pdf.savefig(fig)
-#     plt.close(fig)
-
-
-# with PdfPages("event_cut_plots.pdf") as pdf:
-#     for window in windows:
-#         for option in bib_options:
-#             plot_track_multiplicity(stats, window, option, pdf)
-#             plot_cut_multiplicity(stats, window, option, "n_pass_pt", "pT > 800 GeV", pdf)
-#             plot_cut_multiplicity(stats, window, option, "n_pass_mass", "Mass > 500 GeV", pdf)
-#             plot_cut_multiplicity(stats, window, option, "n_pass_beta", "Beta < 0.99", pdf)
-#             plot_cut_multiplicity(stats, window, option, "n_pass_all", "All Cuts", pdf)
-
+# print_bib_cut_efficiencies(stats, windows, bib_options, ["vb", "ib", "ob"])
 
 
 def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=None):
-    d = stats[window][option][req]
+    d = stats[window][req][option]
 
     fig, ax = plt.subplots(figsize=(7,5))
 
@@ -621,8 +671,8 @@ def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=No
         plt.show()  # fallback for interactive display
 
 # Usage with PdfPages
-with PdfPages("event_cut_plots.pdf") as pdf:
-    for window in windows:
-        for option in bib_options:
-            for req in ["vb", "ib", "ob"]:
-                plot_cut_multiplicity(stats, window, option, req=req, pdf=pdf)
+# with PdfPages("event_cut_plots.pdf") as pdf:
+#     for window in windows:
+#         for option in bib_options:
+#             for req in ["vb", "ib", "ob"]:
+#                 plot_cut_multiplicity(stats, window, option, req=req, pdf=pdf)
