@@ -33,7 +33,7 @@ windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/bib_event_all.pkl")
+CACHE = pathlib.Path("cache/bib_passing_1000.pkl")
 plot_path = "/scratch/wandriscok/kate_mucoll_script/analysis.pdf"
 file_ranges = {
     "10_bib": (0, 1800),
@@ -113,6 +113,10 @@ def time_rms_from_fit(v, t, r, time_unc, b=0.0):
 
     t_pred = (r - b) / v
     dt = t - t_pred
+
+    pulls = np.abs(dt / st)
+    if np.any(pulls > 3):
+        return np.nan, np.nan
 
     uw_rms_t = float(np.sqrt(np.mean(dt * dt)))          
     w_rms_t = float(np.sqrt(np.mean((dt / st) ** 2))) 
@@ -214,13 +218,6 @@ if stats is None:
             req: {
                 option: {
                     "n_events": 0,   # total processed events
-                    "leading_mass": [], "subleading_mass": [],
-                    "leading_pT": [], "subleading_pT": [],
-                    "leading_beta": [], "subleading_beta": [],
-                    "leading_hits": [], "subleading_hits": [],
-                    "leading_d0": [], "subleading_d0": [],
-                    "leading_z0": [], "subleading_z0": [],
-                    "leading_w_rms": [], "subleading_w_rms": [],
                 } for option in bib_options
             } for req in track_req_names
         } for window in windows
@@ -235,16 +232,18 @@ if stats is None:
         track_ob = 0
         track_pass_eta = 0
         over_c = 0
+        tracks_passing_all = 0
+        tracks_passing_1000 = 0
+        tracks_passing_1500 = 0
+        tracks_passing_2000 = 0
+        tracks_passing_2500 = 0
+        tracks_passing_3000 = 0
+        tracks_passing_3500 = 0
+        tracks_passing_4000 = 0
+        tracks_passing_4500 = 0
         print(f"Analyzing {window} window...")
         for option in bib_options:
             print(f"Analyzing {option}...")
-            leading_mass = []
-            sub_leading_mass = []
-            leading_mass_event = []
-            subleading_mass_event = []
-            # stats[window]["vb"][option]["leading_mass"] = []
-            # stats[window]["vb"][option]["subleading_mass"] = []
-
             start, stop = file_ranges[option]
             for ifile in tqdm(range(start, stop)): 
                 file_name = f"nu_background_reco{ifile}.slcio"
@@ -315,7 +314,6 @@ if stats is None:
                         # looking at if pT right
                         # if itrack < 5:
                         #     print(f"DEBUG pT = {reco_pT:.2f} GeV, omega = {track.getOmega():.3e}")
-
                         
                         track_times = []
                         track_pos = []
@@ -385,7 +383,7 @@ if stats is None:
                         } 
                         
                         if vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2:
-                            tracks_by_req["ob"].append(track_info)
+                            # tracks_by_req["ob"].append(track_info)
                             track_ob += 1
                                 
                         if vb_hits >= 3 and ib_hits >= 2:
@@ -396,63 +394,116 @@ if stats is None:
                             #tracks_by_req["vb"].append(track_info)
                             track_vb += 1
 
+                        abs_z0 = abs(z0)
+
+                        if not np.isfinite(mass) or not np.isfinite(reco_pT) or not np.isfinite(beta) or not np.isfinite(abs_z0) or not np.isfinite(w_rms):
+                            continue
+                        
+                        if mass < 0 or reco_pT < 100 or beta > 0.973 or abs_z0 > 0.015 or w_rms > 1.85:
+                            continue
+                        tracks_passing_1000 += 1
+                        print("1 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+                        
+                        if mass < 0 or reco_pT < 100 or beta > 0.973 or abs_z0 > 0.015 or w_rms > 1.6:
+                            continue
+                        tracks_passing_1500 += 1
+                        print("1.5 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+                        
+                        if mass < 1000 or reco_pT < 800 or beta > 0.973 or abs_z0 > 0.015 or w_rms > 1.52:
+                            continue
+                        tracks_passing_2000 += 1
+                        print("2 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+                        
+                        if mass < 1000 or reco_pT < 800 or beta > 0.887 or abs_z0 > 0.02499 or w_rms > 1.46:
+                            continue
+                        tracks_passing_2500 += 1
+                        print("2.5 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+
+                        if mass < 1000 or reco_pT < 800 or beta > 0.819 or abs_z0 > 0.015 or w_rms > 1.51:
+                            continue
+                        tracks_passing_3000 += 1
+                        print("3 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+
+                        if mass < 1000 or reco_pT < 800 or beta > 0.726 or abs_z0 > 0.015 or w_rms > 1.52:
+                            continue
+                        tracks_passing_3500 += 1
+                        print("3.5 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+
+                        if mass < 1000 or reco_pT < 800 or beta > 0.7 or abs_z0 > 0.015 or w_rms > 1.49:
+                            continue
+                        tracks_passing_4000 += 1
+                        print("4 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+
+                        if mass < 1000 or reco_pT < 800 or beta > 0.7 or abs_z0 > 0.015 or w_rms > 1.66:
+                            continue
+                        tracks_passing_4500 += 1
+                        print("4.5 TeV Stau cuts with z0")
+                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+
                         
                     #for req in ["vb", "ib", "ob"]:
                     for req in ["ob"]:
                         tracks = tracks_by_req[req]
 
-                        ## looking at things that are passing the cuts above
+                        # looking at things that are passing the cuts above
                         # n_pt   = sum(1 for t in tracks if pass_pt(t))
                         # n_mass = sum(1 for t in tracks if pass_mass(t))
                         # n_beta = sum(1 for t in tracks if pass_beta(t))
                         # n_all  = sum(1 for t in tracks if pass_all(t))
 
-                        d = stats[window][req][option]
+                    #     d = stats[window][req][option]
 
-                        # d["n_pass_pt"].append(n_pt)
-                        # d["n_pass_mass"].append(n_mass)
-                        # d["n_pass_beta"].append(n_beta)
-                        # d["n_pass_all"].append(n_all)
+                    #     # d["n_pass_pt"].append(n_pt)
+                    #     # d["n_pass_mass"].append(n_mass)
+                    #     # d["n_pass_beta"].append(n_beta)
+                    #     # d["n_pass_all"].append(n_all)
 
-                        passing_all = [t for t in tracks if pass_all(t)]
-                        passing_all.sort(key=lambda t: t["mass"], reverse=True)
+                    #     passing_all = [t for t in tracks if pass_all(t)]
+                    #     passing_all.sort(key=lambda t: t["mass"], reverse=True)
 
-                        if len(passing_all) >= 1:
-                            lead = passing_all[0]
-                            d["leading_mass"].append(lead["mass"])
-                            d["leading_pT"].append(lead["pT"])
-                            d["leading_beta"].append(lead["beta"])
-                            d["leading_hits"].append(lead["hits"])
-                            d["leading_d0"].append(lead["d0"])
-                            d["leading_z0"].append(lead["z0"])
-                            d["leading_w_rms"].append(lead["w_rms"])
+                    #     if len(passing_all) >= 1:
+                    #         lead = passing_all[0]
+                    #         d["leading_mass"].append(lead["mass"])
+                    #         d["leading_pT"].append(lead["pT"])
+                    #         d["leading_beta"].append(lead["beta"])
+                    #         d["leading_hits"].append(lead["hits"])
+                    #         d["leading_d0"].append(lead["d0"])
+                    #         d["leading_z0"].append(lead["z0"])
+                    #         d["leading_w_rms"].append(lead["w_rms"])
 
-                        else:
-                            d["leading_mass"].append(float("nan"))
-                            d["leading_pT"].append(float("nan"))
-                            d["leading_beta"].append(float("nan"))
-                            d["leading_hits"].append(float("nan"))
-                            d["leading_d0"].append(float("nan"))
-                            d["leading_z0"].append(float("nan"))
-                            d["leading_w_rms"].append(float("nan"))
+                    #     else:
+                    #         d["leading_mass"].append(float("nan"))
+                    #         d["leading_pT"].append(float("nan"))
+                    #         d["leading_beta"].append(float("nan"))
+                    #         d["leading_hits"].append(float("nan"))
+                    #         d["leading_d0"].append(float("nan"))
+                    #         d["leading_z0"].append(float("nan"))
+                    #         d["leading_w_rms"].append(float("nan"))
 
-                        if len(passing_all) >= 2:
-                            sub = passing_all[1]
-                            d["subleading_mass"].append(sub["mass"])
-                            d["subleading_pT"].append(sub["pT"])
-                            d["subleading_beta"].append(sub["beta"])
-                            d["subleading_hits"].append(sub["hits"])
-                            d["subleading_d0"].append(sub["d0"])
-                            d["subleading_z0"].append(sub["z0"])
-                            d["subleading_w_rms"].append(sub["w_rms"])
-                        else:
-                            d["subleading_mass"].append(float("nan"))
-                            d["subleading_pT"].append(float("nan"))
-                            d["subleading_beta"].append(float("nan"))
-                            d["subleading_hits"].append(float("nan"))
-                            d["subleading_d0"].append(float("nan"))
-                            d["subleading_z0"].append(float("nan"))
-                            d["subleading_w_rms"].append(float("nan"))
+                    #     if len(passing_all) >= 2:
+                    #         sub = passing_all[1]
+                    #         d["subleading_mass"].append(sub["mass"])
+                    #         d["subleading_pT"].append(sub["pT"])
+                    #         d["subleading_beta"].append(sub["beta"])
+                    #         d["subleading_hits"].append(sub["hits"])
+                    #         d["subleading_d0"].append(sub["d0"])
+                    #         d["subleading_z0"].append(sub["z0"])
+                    #         d["subleading_w_rms"].append(sub["w_rms"])
+                    #     else:
+                    #         d["subleading_mass"].append(float("nan"))
+                    #         d["subleading_pT"].append(float("nan"))
+                    #         d["subleading_beta"].append(float("nan"))
+                    #         d["subleading_hits"].append(float("nan"))
+                    #         d["subleading_d0"].append(float("nan"))
+                    #         d["subleading_z0"].append(float("nan"))
+                    #         d["subleading_w_rms"].append(float("nan"))
 
                 reader.close()
 
@@ -470,6 +521,16 @@ if stats is None:
         print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
         print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
         print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta")
+
+        print(f"Number of tracks passing all cuts: {tracks_passing_all}")
+        print(f"Number of tracks passing 1 TeV cuts: {tracks_passing_1000}")
+        print(f"Number of tracks passing 1.5 TeV cuts: {tracks_passing_1500}")
+        print(f"Number of tracks passing 2 TeV cuts: {tracks_passing_2000}")
+        print(f"Number of tracks passing 2.5 TeV cuts: {tracks_passing_2500}")
+        print(f"Number of tracks passing 3 TeV cuts: {tracks_passing_3000}")
+        print(f"Number of tracks passing 3.5 TeV cuts: {tracks_passing_3500}")
+        print(f"Number of tracks passing 4 TeV cuts: {tracks_passing_4000}")
+        print(f"Number of tracks passing 4.5 TeV cuts: {tracks_passing_4500}")
 
     
 print(stats)
@@ -671,7 +732,7 @@ def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=No
         plt.show()  # fallback for interactive display
 
 # Usage with PdfPages
-# with PdfPages("event_cut_plots.pdf") as pdf:
+# with PdfPages("pdf/event_cut_plots.pdf") as pdf:
 #     for window in windows:
 #         for option in bib_options:
 #             for req in ["vb", "ib", "ob"]:
