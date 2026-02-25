@@ -33,8 +33,8 @@ windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/bib_passing_1000.pkl")
-plot_path = "/scratch/wandriscok/kate_mucoll_script/analysis.pdf"
+CACHE = pathlib.Path("cache/bib_event_lead_sub.pkl")
+SAVE_EVERY = 50
 file_ranges = {
     "10_bib": (0, 1800),
     "bib": (4, 8)
@@ -116,7 +116,7 @@ def time_rms_from_fit(v, t, r, time_unc, b=0.0):
 
     pulls = np.abs(dt / st)
     if np.any(pulls > 3):
-        return np.nan, np.nan
+        return None, None
 
     uw_rms_t = float(np.sqrt(np.mean(dt * dt)))          
     w_rms_t = float(np.sqrt(np.mean((dt / st) ** 2))) 
@@ -218,6 +218,13 @@ if stats is None:
             req: {
                 option: {
                     "n_events": 0,   # total processed events
+                    "leading_mass": [], "subleading_mass": [],
+                    "leading_pT": [], "subleading_pT": [],
+                    "leading_beta": [], "subleading_beta": [],
+                    "leading_hits": [], "subleading_hits": [],
+                    "leading_d0": [], "subleading_d0": [],
+                    "leading_z0": [], "subleading_z0": [],
+                    "leading_w_rms": [], "subleading_w_rms": [],
                 } for option in bib_options
             } for req in track_req_names
         } for window in windows
@@ -226,23 +233,19 @@ if stats is None:
     reader = pyLCIO.IOIMPL.LCFactory.getInstance().createLCReader()
     
     for window in windows:
-        total_tracks = 0
-        track_vb = 0
-        track_ib = 0
-        track_ob = 0
-        track_pass_eta = 0
-        over_c = 0
-        tracks_passing_all = 0
-        tracks_passing_1000 = 0
-        tracks_passing_1500 = 0
-        tracks_passing_2000 = 0
-        tracks_passing_2500 = 0
-        tracks_passing_3000 = 0
-        tracks_passing_3500 = 0
-        tracks_passing_4000 = 0
-        tracks_passing_4500 = 0
+        
         print(f"Analyzing {window} window...")
         for option in bib_options:
+            total_tracks = 0
+            track_vb = 0
+            track_ib = 0
+            track_ob = 0
+            track_pass_eta = 0
+            track_pass_w_rms = 0
+            track_over_10tev = 0
+            over_c = 0
+            nan_value = 0
+            killed_3sigma = 0
             print(f"Analyzing {option}...")
             start, stop = file_ranges[option]
             for ifile in tqdm(range(start, stop)): 
@@ -297,17 +300,6 @@ if stats is None:
                         ib_hits = 0
                         ob_hits = 0
 
-                        for hit in track_hits:
-                            decoder.setValue(int(hit.getCellID0()))
-                            system = decoder["system"].value()
-
-                            if system in (1, 2):
-                                vb_hits += 0.5
-                            elif system in (3, 4):
-                                ib_hits += 1
-                            elif system in (5, 6):
-                                ob_hits += 1
-
                         ## think about if this is giving right thing
                         reco_pT = 0.3 * Bfield / fabs(track.getOmega() * 1000.)
 
@@ -324,6 +316,19 @@ if stats is None:
                             decoder.setValue(int(hit.getCellID0()))
                             system = decoder["system"].value()
 
+                            if system in (1,2):
+                                vb_hits += 0.5
+                                spatial_unc.append(0.005)
+                                time_unc.append(0.03)
+                            elif system in (3,4):
+                                ib_hits += 1
+                                spatial_unc.append(0.007)
+                                time_unc.append(0.06)
+                            elif system in (5,6):
+                                ob_hits += 1
+                                spatial_unc.append(0.007)
+                                time_unc.append(0.06)
+                            
                             x = hit.getPosition()[0]
                             y = hit.getPosition()[1]
                             z = hit.getPosition()[2]
@@ -333,18 +338,12 @@ if stats is None:
 
                             track_times.append(corrected_t)
                             track_pos.append(hit_pos)
-
-                            if system in (1,2):
-                                spatial_unc.append(0.005)
-                                time_unc.append(0.03)
-                            else:
-                                spatial_unc.append(0.007)
-                                time_unc.append(0.06)
                         
                         v_fit, v_err, uw_rms, w_rms = reco_velo_no_intercept(track_times, track_pos, spatial_unc, time_unc) 
                         
                         beta = v_fit / speedoflight
 
+                        # if velo > c, turning velo = c
                         if np.isfinite(v_fit) and v_fit > speedoflight:
                             v_fit = speedoflight
                             over_c += 1
@@ -354,10 +353,24 @@ if stats is None:
 
                         tan_lambda = track.getTanLambda()
                         eta = np.arcsinh(tan_lambda)
+                        # eta cut
                         if abs(eta) > 0.8:
                             continue
-
                         track_pass_eta += 1
+
+                        # one hit over 3 sigma cut
+                        if w_rms is None:
+                            killed_3sigma += 1
+                            continue
+
+                        # weighted rms cut
+                        if w_rms > 1.6:
+                            continue
+                        track_pass_w_rms += 1
+
+                        if reco_pT > 10000:
+                            track_over_10tev += 1
+                            continue
 
                         beta_for_mass = v_fit / speedoflight 
                         
@@ -382,130 +395,71 @@ if stats is None:
                             "w_rms": float(w_rms) if np.isfinite(w_rms) else np.nan
                         } 
                         
-                        if vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2:
-                            # tracks_by_req["ob"].append(track_info)
-                            track_ob += 1
-                                
-                        if vb_hits >= 3 and ib_hits >= 2:
-                            #tracks_by_req["ib"].append(track_info)
-                            track_ib += 1
-
                         if vb_hits >= 3: 
                             #tracks_by_req["vb"].append(track_info)
                             track_vb += 1
+                        print(vb_hits)
 
-                        abs_z0 = abs(z0)
-
-                        if not np.isfinite(mass) or not np.isfinite(reco_pT) or not np.isfinite(beta) or not np.isfinite(abs_z0) or not np.isfinite(w_rms):
-                            continue
+                        if vb_hits >= 3 and ib_hits >= 2:
+                            #tracks_by_req["ib"].append(track_info)
+                            track_ib += 1
                         
-                        if mass < 0 or reco_pT < 100 or beta > 0.973 or abs_z0 > 0.015 or w_rms > 1.85:
-                            continue
-                        tracks_passing_1000 += 1
-                        print("1 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
-                        
-                        if mass < 0 or reco_pT < 100 or beta > 0.973 or abs_z0 > 0.015 or w_rms > 1.6:
-                            continue
-                        tracks_passing_1500 += 1
-                        print("1.5 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
-                        
-                        if mass < 1000 or reco_pT < 800 or beta > 0.973 or abs_z0 > 0.015 or w_rms > 1.52:
-                            continue
-                        tracks_passing_2000 += 1
-                        print("2 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
-                        
-                        if mass < 1000 or reco_pT < 800 or beta > 0.887 or abs_z0 > 0.02499 or w_rms > 1.46:
-                            continue
-                        tracks_passing_2500 += 1
-                        print("2.5 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
+                        if vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2:
+                            tracks_by_req["ob"].append(track_info)
+                            track_ob += 1
 
-                        if mass < 1000 or reco_pT < 800 or beta > 0.819 or abs_z0 > 0.015 or w_rms > 1.51:
+                        if not np.isfinite(mass) or not np.isfinite(reco_pT) or not np.isfinite(beta):
+                            nan_value += 1
                             continue
-                        tracks_passing_3000 += 1
-                        print("3 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
 
-                        if mass < 1000 or reco_pT < 800 or beta > 0.726 or abs_z0 > 0.015 or w_rms > 1.52:
-                            continue
-                        tracks_passing_3500 += 1
-                        print("3.5 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
-
-                        if mass < 1000 or reco_pT < 800 or beta > 0.7 or abs_z0 > 0.015 or w_rms > 1.49:
-                            continue
-                        tracks_passing_4000 += 1
-                        print("4 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
-
-                        if mass < 1000 or reco_pT < 800 or beta > 0.7 or abs_z0 > 0.015 or w_rms > 1.66:
-                            continue
-                        tracks_passing_4500 += 1
-                        print("4.5 TeV Stau cuts with z0")
-                        print(f"Track {itrack} has mass = {mass}, pT = {reco_pT}, beta = {beta}, w vrms = {w_rms}, abs_z0 = {abs_z0}")
-
-                        
-                    #for req in ["vb", "ib", "ob"]:
                     for req in ["ob"]:
                         tracks = tracks_by_req[req]
 
-                        # looking at things that are passing the cuts above
-                        # n_pt   = sum(1 for t in tracks if pass_pt(t))
-                        # n_mass = sum(1 for t in tracks if pass_mass(t))
-                        # n_beta = sum(1 for t in tracks if pass_beta(t))
-                        # n_all  = sum(1 for t in tracks if pass_all(t))
+                        d = stats[window][req][option]
+                        tracks.sort(key=lambda t: t["pT"], reverse=True)
 
-                    #     d = stats[window][req][option]
+                        if len(tracks) >= 1:
+                            lead = tracks[0]
+                            d["leading_mass"].append(lead["mass"])
+                            d["leading_pT"].append(lead["pT"])
+                            d["leading_beta"].append(lead["beta"])
+                            d["leading_hits"].append(lead["hits"])
+                            d["leading_d0"].append(lead["d0"])
+                            d["leading_z0"].append(lead["z0"])
+                            d["leading_w_rms"].append(lead["w_rms"])
+                        else:
+                            d["leading_mass"].append(float("nan"))
+                            d["leading_pT"].append(float("nan"))
+                            d["leading_beta"].append(float("nan"))
+                            d["leading_hits"].append(float("nan"))
+                            d["leading_d0"].append(float("nan"))
+                            d["leading_z0"].append(float("nan"))
+                            d["leading_w_rms"].append(float("nan"))
 
-                    #     # d["n_pass_pt"].append(n_pt)
-                    #     # d["n_pass_mass"].append(n_mass)
-                    #     # d["n_pass_beta"].append(n_beta)
-                    #     # d["n_pass_all"].append(n_all)
-
-                    #     passing_all = [t for t in tracks if pass_all(t)]
-                    #     passing_all.sort(key=lambda t: t["mass"], reverse=True)
-
-                    #     if len(passing_all) >= 1:
-                    #         lead = passing_all[0]
-                    #         d["leading_mass"].append(lead["mass"])
-                    #         d["leading_pT"].append(lead["pT"])
-                    #         d["leading_beta"].append(lead["beta"])
-                    #         d["leading_hits"].append(lead["hits"])
-                    #         d["leading_d0"].append(lead["d0"])
-                    #         d["leading_z0"].append(lead["z0"])
-                    #         d["leading_w_rms"].append(lead["w_rms"])
-
-                    #     else:
-                    #         d["leading_mass"].append(float("nan"))
-                    #         d["leading_pT"].append(float("nan"))
-                    #         d["leading_beta"].append(float("nan"))
-                    #         d["leading_hits"].append(float("nan"))
-                    #         d["leading_d0"].append(float("nan"))
-                    #         d["leading_z0"].append(float("nan"))
-                    #         d["leading_w_rms"].append(float("nan"))
-
-                    #     if len(passing_all) >= 2:
-                    #         sub = passing_all[1]
-                    #         d["subleading_mass"].append(sub["mass"])
-                    #         d["subleading_pT"].append(sub["pT"])
-                    #         d["subleading_beta"].append(sub["beta"])
-                    #         d["subleading_hits"].append(sub["hits"])
-                    #         d["subleading_d0"].append(sub["d0"])
-                    #         d["subleading_z0"].append(sub["z0"])
-                    #         d["subleading_w_rms"].append(sub["w_rms"])
-                    #     else:
-                    #         d["subleading_mass"].append(float("nan"))
-                    #         d["subleading_pT"].append(float("nan"))
-                    #         d["subleading_beta"].append(float("nan"))
-                    #         d["subleading_hits"].append(float("nan"))
-                    #         d["subleading_d0"].append(float("nan"))
-                    #         d["subleading_z0"].append(float("nan"))
-                    #         d["subleading_w_rms"].append(float("nan"))
+                        if len(tracks) >= 2:
+                            sub = tracks[1]
+                            d["subleading_mass"].append(sub["mass"])
+                            d["subleading_pT"].append(sub["pT"])
+                            d["subleading_beta"].append(sub["beta"])
+                            d["subleading_hits"].append(sub["hits"])
+                            d["subleading_d0"].append(sub["d0"])
+                            d["subleading_z0"].append(sub["z0"])
+                            d["subleading_w_rms"].append(sub["w_rms"])
+                        else:
+                            d["subleading_mass"].append(float("nan"))
+                            d["subleading_pT"].append(float("nan"))
+                            d["subleading_beta"].append(float("nan"))
+                            d["subleading_hits"].append(float("nan"))
+                            d["subleading_d0"].append(float("nan"))
+                            d["subleading_z0"].append(float("nan"))
+                            d["subleading_w_rms"].append(float("nan"))
 
                 reader.close()
+
+                if (ifile - start + 1) % SAVE_EVERY == 0:
+                    with CACHE.open("wb") as f:
+                        pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    print(f"Checkpoint saved at file {ifile}")
 
         print(f"Finished {window}")
 
@@ -514,181 +468,26 @@ if stats is None:
         ob_percent = (track_ob / track_pass_eta) * 100
         overc_percent = (over_c / track_pass_eta) * 100
 
+        print(f"num killed by 3 sigma {killed_3sigma}")
+
         print(f"{window} window stats:")
         print(f"Number of total tracks: {total_tracks}")
         print(f"Number of tracks passing eta cut: {track_pass_eta}")
+        print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms}")
+        print(f"Number of tracks over 10TeV pT: {track_over_10tev}")
+        print(f"Number of tracks rejected because NaN value: {nan_value}")
         print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
         print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
         print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
         print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta")
 
-        print(f"Number of tracks passing all cuts: {tracks_passing_all}")
-        print(f"Number of tracks passing 1 TeV cuts: {tracks_passing_1000}")
-        print(f"Number of tracks passing 1.5 TeV cuts: {tracks_passing_1500}")
-        print(f"Number of tracks passing 2 TeV cuts: {tracks_passing_2000}")
-        print(f"Number of tracks passing 2.5 TeV cuts: {tracks_passing_2500}")
-        print(f"Number of tracks passing 3 TeV cuts: {tracks_passing_3000}")
-        print(f"Number of tracks passing 3.5 TeV cuts: {tracks_passing_3500}")
-        print(f"Number of tracks passing 4 TeV cuts: {tracks_passing_4000}")
-        print(f"Number of tracks passing 4.5 TeV cuts: {tracks_passing_4500}")
-
     
-print(stats)
+print(stats["loose"]["ob"]["10_bib"]["leading_w_rms"])
 CACHE.parent.mkdir(exist_ok=True)
 with CACHE.open("wb") as f:
     pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
-    print(f"Writing cache to {CACHE}")
+    print(f"Writing final cache to {CACHE}")
 print("Saved cache successfully.")
-
-
-def print_bib_track_summary(stats, windows, bib_options):
-    sep = "-" * 120
-
-    for window in windows:
-        for option in bib_options:
-            print("\n" + sep)
-            print(f"BIB Track Multiplicity Summary | window = {window} | option = {option}")
-            print(sep)
-
-            header = (
-                "REQ | Tracks>=1      |  pT pass      |  Mass pass    |  Beta pass     |  All cuts"
-            )
-            print(header)
-            print(sep)
-
-            for req in ["vb", "ib", "ob"]:
-                N_events = stats[window][req][option]["n_events"]
-                print(f"Total processed events: {N_events}")
-                print(sep)
-
-                d = stats[window][req][option]
-
-                def count_events(arr, min_tracks=1):
-                    return sum(x >= min_tracks for x in arr)
-
-                def fmt(n):
-                    return f"{n}/{N_events} ({100*n/N_events:5.1f}%)"
-
-                evt_tracks = count_events(d["n_total_tracks"], 1)
-                evt_pt     = count_events(d["n_pass_pt"], 1)
-                evt_mass   = count_events(d["n_pass_mass"], 1)
-                evt_beta   = count_events(d["n_pass_beta"], 1)
-                evt_all    = count_events(d["n_pass_all"], 1)
-
-                print(
-                    f"{req.upper():>3} | "
-                    f"{fmt(evt_tracks):>12} | "
-                    f"{fmt(evt_pt):>12} | "
-                    f"{fmt(evt_mass):>12} | "
-                    f"{fmt(evt_beta):>12} | "
-                    f"{fmt(evt_all):>12}"
-                )
-
-            print(sep)
-            print("Each value shows: (# events with ≥1 such track) / (total events)")
-            print(sep)
-
-# getting info about the tracks passing each
-def summarize_track_multiplicity(arr):
-    arr = np.array(arr)
-
-    return {
-        "mean": np.mean(arr),
-        "max": np.max(arr),
-        "n0": np.sum(arr == 0),
-        "n1": np.sum(arr == 1),
-        "n2": np.sum(arr == 2),
-        "n3p": np.sum(arr >= 3),
-    }
-
-
-def print_bib_track_cut_summary(stats, windows, options, reqs):
-
-    sep = "-" * 100
-
-    for window in windows:
-        for option in options:
-
-            print("\n" + sep)
-            print(f"BIB Track Cut Multiplicity | window = {window} | option = {option}")
-            print(sep)
-
-            for req in reqs:
-                d = stats[window][req][option]
-                N_events = stats[window][req][option]["n_events"]
-
-                print(f"\nRequirement region: {req.upper()}  (Events = {N_events})")
-
-                for key, label in [
-                    ("n_pass_pt",   "pT > 800 GeV"),
-                    ("n_pass_mass", "Mass > 500 GeV"),
-                    ("n_pass_beta", "Beta < 0.99"),
-                    ("n_pass_all",  "All cuts"),
-                ]:
-                    s = summarize_track_multiplicity(d[key])
-
-                    print(
-                        f"  {label:<15} | "
-                        f"avg tracks/event = {s['mean']:.2f} | "
-                        f"max = {s['max']:3d} | "
-                        f"events with 0/1/2/≥3 tracks = "
-                        f"{s['n0']:3d} / {s['n1']:3d} / {s['n2']:3d} / {s['n3p']:3d}"
-                    )
-
-            print(sep)
-
-
-
-def print_bib_cut_efficiencies(stats, windows, bib_options, track_reqs):
-    sep = "=" * 120
-
-    for window in windows:
-        for option in bib_options:
-            print("\n" + sep)
-            print(f"BIB CUT EFFICIENCIES | window = {window} | option = {option}")
-            print(sep)
-
-            for req in track_reqs:
-                d = stats[window][req][option]
-
-                totals = np.array(d["n_total_tracks"])
-                pt     = np.array(d["n_pass_pt"])
-                mass   = np.array(d["n_pass_mass"])
-                beta   = np.array(d["n_pass_beta"])
-                allcut = np.array(d["n_pass_all"])
-
-                total_tracks_all_events = totals.sum()
-
-                print(f"\nRegion: {req.upper()}")
-                print(f"  Total tracks (all events combined): {total_tracks_all_events}")
-
-                def line(label, arr):
-                    passed = arr.sum()
-                    frac = 100 * passed / total_tracks_all_events if total_tracks_all_events > 0 else 0
-                    print(f"  {label:<12}: {passed:7d}  / {total_tracks_all_events:7d}  = {frac:6.2f}%")
-
-                line("pT cut", pt)
-                line("Mass cut", mass)
-                line("Beta cut", beta)
-                line("All cuts", allcut)
-
-                print("-" * 80)
-
-            print(sep)
-
-
-
-#print_bib_track_summary(stats, windows, bib_options)
-
-
-#print_bib_track_cut_summary(
-#     stats,
-#     windows=["loose"],
-#     options=["10_bib"],
-#     reqs=["vb", "ib", "ob"]
-# )
-
-# print_bib_cut_efficiencies(stats, windows, bib_options, ["vb", "ib", "ob"])
 
 
 def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=None):
@@ -737,3 +536,5 @@ def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=No
 #         for option in bib_options:
 #             for req in ["vb", "ib", "ob"]:
 #                 plot_cut_multiplicity(stats, window, option, req=req, pdf=pdf)
+
+
