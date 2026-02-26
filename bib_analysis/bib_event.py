@@ -36,7 +36,7 @@ bib_options = ["10_bib"]
 CACHE = pathlib.Path("cache/bib_event_lead_sub.pkl")
 SAVE_EVERY = 50
 file_ranges = {
-    "10_bib": (0, 1800),
+    "10_bib": (0, 2500),
     "bib": (4, 8)
 }
 Bfield = 3.57
@@ -109,18 +109,17 @@ def time_rms_from_fit(v, t, r, time_unc, b=0.0):
     m = np.isfinite(t) & np.isfinite(r) & np.isfinite(st) & (st > 0)
     t, r, st = t[m], r[m], st[m]
     if t.size < 3 or (not np.isfinite(v)) or abs(v) < 1e-12:
-        return np.nan, np.nan
+        return np.nan, np.nan, False
 
     t_pred = (r - b) / v
     dt = t - t_pred
 
     pulls = np.abs(dt / st)
-    if np.any(pulls > 3):
-        return None, None
+    has_outlier = np.any(pulls > 3)
 
     uw_rms_t = float(np.sqrt(np.mean(dt * dt)))          
     w_rms_t = float(np.sqrt(np.mean((dt / st) ** 2))) 
-    return uw_rms_t, w_rms_t
+    return uw_rms_t, w_rms_t, has_outlier
 
 def reco_velo(function_type, times, pos, spatial_unc):
     x = np.asarray(times, dtype=float)
@@ -173,7 +172,7 @@ def reco_velo_no_intercept(times, pos, spatial_unc, time_unc):
     x, y, s, st = x[m], y[m], s[m], st[m]
 
     if x.size < 3 or np.allclose(x, x.mean()):
-        return np.nan, np.nan, np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan, np.nan
 
     v0 = np.array([guess_velo])
 
@@ -190,7 +189,7 @@ def reco_velo_no_intercept(times, pos, spatial_unc, time_unc):
 
     v = float(fit.x[0])
 
-    uw_rms_t, w_rms_t = time_rms_from_fit(v, x, y, st, b=0.0)
+    uw_rms_t, w_rms_t, has_outlier = time_rms_from_fit(v, x, y, st, b=0.0)
 
     try:
         r = (v * x - y)
@@ -203,7 +202,7 @@ def reco_velo_no_intercept(times, pos, spatial_unc, time_unc):
     except Exception:
         v_err = np.nan
 
-    return v, v_err, uw_rms_t, w_rms_t
+    return v, v_err, uw_rms_t, w_rms_t, has_outlier
 
 
 stats = None
@@ -245,7 +244,7 @@ if stats is None:
             track_over_10tev = 0
             over_c = 0
             nan_value = 0
-            killed_3sigma = 0
+            tracks_w_outlier = 0
             print(f"Analyzing {option}...")
             start, stop = file_ranges[option]
             for ifile in tqdm(range(start, stop)): 
@@ -339,7 +338,7 @@ if stats is None:
                             track_times.append(corrected_t)
                             track_pos.append(hit_pos)
                         
-                        v_fit, v_err, uw_rms, w_rms = reco_velo_no_intercept(track_times, track_pos, spatial_unc, time_unc) 
+                        v_fit, v_err, uw_rms, w_rms, has_outlier = reco_velo_no_intercept(track_times, track_pos, spatial_unc, time_unc) 
                         
                         beta = v_fit / speedoflight
 
@@ -359,12 +358,11 @@ if stats is None:
                         track_pass_eta += 1
 
                         # one hit over 3 sigma cut
-                        if w_rms is None:
-                            killed_3sigma += 1
-                            continue
+                        if has_outlier:
+                            tracks_w_outlier += 1
 
                         # weighted rms cut
-                        if w_rms > 1.6:
+                        if (not np.isfinite(w_rms)) or (w_rms > 1.6):
                             continue
                         track_pass_w_rms += 1
 
@@ -398,7 +396,6 @@ if stats is None:
                         if vb_hits >= 3: 
                             #tracks_by_req["vb"].append(track_info)
                             track_vb += 1
-                        print(vb_hits)
 
                         if vb_hits >= 3 and ib_hits >= 2:
                             #tracks_by_req["ib"].append(track_info)
@@ -468,7 +465,7 @@ if stats is None:
         ob_percent = (track_ob / track_pass_eta) * 100
         overc_percent = (over_c / track_pass_eta) * 100
 
-        print(f"num killed by 3 sigma {killed_3sigma}")
+        print(f"num tracks that have 3 sigma hit: {tracks_w_outlier}")
 
         print(f"{window} window stats:")
         print(f"Number of total tracks: {total_tracks}")
@@ -482,7 +479,7 @@ if stats is None:
         print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta")
 
     
-print(stats["loose"]["ob"]["10_bib"]["leading_w_rms"])
+#print(stats["loose"]["ob"]["10_bib"]["leading_w_rms"])
 CACHE.parent.mkdir(exist_ok=True)
 with CACHE.open("wb") as f:
     pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -538,3 +535,103 @@ def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=No
 #                 plot_cut_multiplicity(stats, window, option, req=req, pdf=pdf)
 
 
+def _event_norm_hist(ax, arr, N_events, bins, label):
+    x = np.asarray(arr, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0 or N_events <= 0:
+        return 0.0
+    w = np.full_like(x, 1.0 / N_events, dtype=float)  # sums to fraction of events
+    ax.hist(x, bins=bins, weights=w, histtype="step", linewidth=2, label=label)
+    return x.size / N_events  # fraction of events with a finite value
+
+
+def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None, 
+                  tick_major=18, tick_minor=16):
+    if bins_cfg is None:
+        bins_cfg = {
+            "pT": np.linspace(0, 100, 60),
+            "mass": np.linspace(0, 200, 60),
+            "beta": np.linspace(0.8, 1.02, 60),
+            "d0": np.linspace(-0.01, 0.01, 60),
+            "z0": np.linspace(-0.01, 0.01, 60),
+            "hits": np.linspace(0, 18, 60),
+            "w_rms": np.linspace(0, 2, 60),
+        }
+    if xlims_cfg is None:
+        xlims_cfg = {
+            "pT": (0, 100),
+            "mass": (0, 200),
+            "beta": (0.8, 1.02),
+            "d0": (-0.01, 0.01),
+            "z0": (-0.01, 0.01),
+            "hits": (0, 18),
+            "w_rms": (0, 2),
+        }
+    
+    features = [
+        ("pT", "leading_pT", "subleading_pT", r"$p_T$ [GeV]"),
+        ("mass", "leading_mass", "subleading_mass", r"Mass [GeV]"),
+        ("beta", "leading_beta", "subleading_beta", r"$\beta$"),
+        ("d0", "leading_d0", "subleading_d0", r"D0"),
+        ("z0", "leading_z0", "subleading_z0", r"Z0"),
+        ("hits", "leading_hits", "subleading_hits", r"Number of Hits"),
+        ("w_rms", "leading_w_rms", "subleading_w_rms", r"Weighted RMS"),
+    ]
+
+    d = stats[window][req][option]
+
+    N_events = int(d.get("n_events", 0))
+
+    for key, lead_key, sub_key, xlabel in features:
+        fig, ax = plt.subplots(figsize=(8,6))
+
+        print("Leading length:", len(d.get(lead_key, [])))
+        print("Subleading length:", len(d.get(sub_key, [])))
+
+        frac_lead = _event_norm_hist(ax, d.get(lead_key, []), 
+                                     N_events, bins_cfg[key],
+                                     label="Leading")
+        frac_sub = _event_norm_hist(ax, d.get(sub_key, []), 
+                                    N_events, bins_cfg[key],
+                                    label="Subleading")
+        
+        ax.set_xlabel(xlabel, fontsize=20)
+        ax.set_ylabel("Fraction of events per bin", fontsize=20)
+
+        ax.tick_params(axis="both", which="major",
+                        labelsize=tick_major, length=6, width=1.5)
+        ax.tick_params(axis="both", which="minor",
+                        labelsize=tick_minor, length=4, width=1.0)
+
+        if key in xlims_cfg and xlims_cfg[key] is not None:
+            ax.set_xlim(*xlims_cfg[key])
+
+        ax.grid(True, alpha=0.2)
+        ax.legend(frameon=False, fontsize=13, loc="upper right")
+
+        ax.text(0.02, 0.98, "Muon Collider",
+                ha="left", va="top", transform=ax.transAxes,
+                fontsize=20, fontweight="bold", style="italic")
+        ax.text(0.02, 0.93, f"muons, {option}, {window}, req={req}",
+                ha="left", va="top", transform=ax.transAxes, fontsize=14)
+        ax.text(0.02, 0.89, f"N_events={N_events}",
+                ha="left", va="top", transform=ax.transAxes, fontsize=14)
+
+        ax.text(0.98, 0.02,
+                f"Frac(events w/ leading) ~ {frac_lead:.3f}\n"
+                f"Frac(events w/ subleading) ~ {frac_sub:.3f}",
+                ha="right", va="bottom", transform=ax.transAxes, fontsize=12)
+
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
+print(stats["loose"]["ob"]["10_bib"]["subleading_pT"])
+
+with PdfPages("pdf/lead_sub_plots.pdf") as pdf:
+    for window in windows:
+        for option in bib_options:
+            for req in ["ob"]:
+                plot_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
+                print("Saved event-normalized leading/subleading plots to pdf/lead_sub_plots.pdf")
