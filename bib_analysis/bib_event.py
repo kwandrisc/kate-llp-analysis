@@ -33,7 +33,7 @@ windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/bib_event_lead_sub.pkl")
+CACHE = pathlib.Path("cache/bib_event_plot_lead_sub.pkl")
 SAVE_EVERY = 50
 file_ranges = {
     "10_bib": (0, 2500),
@@ -240,8 +240,8 @@ if stats is None:
             track_ib = 0
             track_ob = 0
             track_pass_eta = 0
-            track_pass_w_rms = 0
-            track_over_10tev = 0
+            # track_pass_w_rms = 0
+            # track_over_10tev = 0
             over_c = 0
             nan_value = 0
             tracks_w_outlier = 0
@@ -362,13 +362,14 @@ if stats is None:
                             tracks_w_outlier += 1
 
                         # weighted rms cut
-                        if (not np.isfinite(w_rms)) or (w_rms > 1.6):
-                            continue
-                        track_pass_w_rms += 1
+                        # if (not np.isfinite(w_rms)) or (w_rms > 1.6):
+                        #     continue
+                        # track_pass_w_rms += 1
 
-                        if reco_pT > 10000:
-                            track_over_10tev += 1
-                            continue
+                        # unreasonably high pt cut
+                        # if reco_pT > 10000:
+                        #     track_over_10tev += 1
+                        #     continue
 
                         beta_for_mass = v_fit / speedoflight 
                         
@@ -470,8 +471,8 @@ if stats is None:
         print(f"{window} window stats:")
         print(f"Number of total tracks: {total_tracks}")
         print(f"Number of tracks passing eta cut: {track_pass_eta}")
-        print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms}")
-        print(f"Number of tracks over 10TeV pT: {track_over_10tev}")
+        # print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms}")
+        # print(f"Number of tracks over 10TeV pT: {track_over_10tev}")
         print(f"Number of tracks rejected because NaN value: {nan_value}")
         print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
         print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
@@ -549,21 +550,21 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
                   tick_major=18, tick_minor=16):
     if bins_cfg is None:
         bins_cfg = {
-            "pT": np.linspace(0, 100, 60),
+            "pT": np.linspace(0, 200, 60),
             "mass": np.linspace(0, 200, 60),
-            "beta": np.linspace(0.8, 1.02, 60),
-            "d0": np.linspace(-0.01, 0.01, 60),
-            "z0": np.linspace(-0.01, 0.01, 60),
+            "beta": np.linspace(0.4, 1.02, 60),
+            "d0": np.linspace(-5, 5, 60),
+            "z0": np.linspace(-10, 10, 60),
             "hits": np.linspace(0, 18, 60),
             "w_rms": np.linspace(0, 2, 60),
         }
     if xlims_cfg is None:
         xlims_cfg = {
-            "pT": (0, 100),
+            "pT": (0, 200),
             "mass": (0, 200),
-            "beta": (0.8, 1.02),
-            "d0": (-0.01, 0.01),
-            "z0": (-0.01, 0.01),
+            "beta": (0.4, 1.02),
+            "d0": (-5, 5),
+            "z0": (-10, 10),
             "hits": (0, 18),
             "w_rms": (0, 2),
         }
@@ -594,7 +595,7 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
         frac_sub = _event_norm_hist(ax, d.get(sub_key, []), 
                                     N_events, bins_cfg[key],
                                     label="Subleading")
-        
+               
         ax.set_xlabel(xlabel, fontsize=20)
         ax.set_ylabel("Fraction of events per bin", fontsize=20)
 
@@ -612,7 +613,7 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
         ax.text(0.02, 0.98, "Muon Collider",
                 ha="left", va="top", transform=ax.transAxes,
                 fontsize=20, fontweight="bold", style="italic")
-        ax.text(0.02, 0.93, f"muons, {option}, {window}, req={req}",
+        ax.text(0.02, 0.93, f"BIB, {option}, {window}, req={req}",
                 ha="left", va="top", transform=ax.transAxes, fontsize=14)
         ax.text(0.02, 0.89, f"N_events={N_events}",
                 ha="left", va="top", transform=ax.transAxes, fontsize=14)
@@ -627,11 +628,80 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
         plt.close(fig)
 
 
-print(stats["loose"]["ob"]["10_bib"]["subleading_pT"])
+
+def plot_log_lead_sub(stats, window, option, req, 
+                  tick_major=18, tick_minor=16):
+    
+    features = [
+        ("pT", "leading_pT", "subleading_pT", r"$p_T$ [GeV] - log"),
+        ("mass", "leading_mass", "subleading_mass", r"Mass [GeV] - log"),
+        ("beta", "leading_beta", "subleading_beta", r"$\beta$ - log"),
+        ("d0", "leading_d0", "subleading_d0", r"D0 - log"),
+        ("z0", "leading_z0", "subleading_z0", r"Z0 - log"),
+        ("hits", "leading_hits", "subleading_hits", r"Number of Hits - log"),
+        ("w_rms", "leading_w_rms", "subleading_w_rms", r"Weighted RMS - log"),
+    ]
+
+    d = stats[window][req][option]
+
+    N_events = int(d.get("n_events", 0))
+
+    for key, lead_key, sub_key, xlabel in features:
+        fig, ax = plt.subplots(figsize=(8,6))
+
+        print("Leading length:", len(d.get(lead_key, [])))
+        print("Subleading length:", len(d.get(sub_key, [])))
+
+        frac_lead = _event_norm_hist(ax, d.get(lead_key, []), 
+                                     N_events, 60,
+                                     label="Leading")
+        frac_sub = _event_norm_hist(ax, d.get(sub_key, []), 
+                                    N_events, 60,
+                                    label="Subleading")
+               
+        if key == "d0" or key == "z0":
+            ax.set_xlabel("symlog")
+            ax.set_ylabel("symlog")
+        else:
+            ax.set_xscale("log")
+            ax.set_yscale("log") 
+        ax.set_xlabel(xlabel, fontsize=20)
+        ax.set_ylabel("Fraction of events per bin - log", fontsize=20)
+
+        ax.tick_params(axis="both", which="major",
+                        labelsize=tick_major, length=6, width=1.5)
+        ax.tick_params(axis="both", which="minor",
+                        labelsize=tick_minor, length=4, width=1.0)
+
+        ax.grid(True, alpha=0.2)
+        ax.legend(frameon=False, fontsize=13, loc="upper right")
+
+        ax.text(0.02, 0.98, "Muon Collider",
+                ha="left", va="top", transform=ax.transAxes,
+                fontsize=20, fontweight="bold", style="italic")
+        ax.text(0.02, 0.93, f"BIB, {option}, {window}, req={req}",
+                ha="left", va="top", transform=ax.transAxes, fontsize=14)
+        ax.text(0.02, 0.89, f"N_events={N_events}",
+                ha="left", va="top", transform=ax.transAxes, fontsize=14)
+
+        ax.text(0.98, 0.02,
+                f"Frac(events w/ leading) ~ {frac_lead:.3f}\n"
+                f"Frac(events w/ subleading) ~ {frac_sub:.3f}",
+                ha="right", va="bottom", transform=ax.transAxes, fontsize=12)
+
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
 
 with PdfPages("pdf/lead_sub_plots.pdf") as pdf:
     for window in windows:
         for option in bib_options:
             for req in ["ob"]:
                 plot_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
+                plot_log_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
                 print("Saved event-normalized leading/subleading plots to pdf/lead_sub_plots.pdf")
+
+
+
+ 
