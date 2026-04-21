@@ -33,11 +33,11 @@ windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/bib_event_plot_lead_sub.pkl")
+CACHE = pathlib.Path("cache/bib_event_plot_lead_sub_loose.pkl")
 SAVE_EVERY = 50
 file_ranges = {
     "10_bib": (0, 2500),
-    "bib": (4, 8)
+    "bib": (0, 10)
 }
 Bfield = 3.57
 speedoflight = 299792458/1000000  # mm/ns
@@ -211,6 +211,8 @@ if (not rebuild) and os.path.exists(CACHE):
         print("Loading in cached arrays...")
         stats = pickle.load(f)
 
+CACHE.parent.mkdir(exist_ok=True)
+
 if stats is None:
     stats = {
         window: {
@@ -240,8 +242,9 @@ if stats is None:
             track_ib = 0
             track_ob = 0
             track_pass_eta = 0
-            # track_pass_w_rms = 0
-            # track_over_10tev = 0
+            track_pass_chi2 = 0
+            track_pass_w_rms = 0
+            track_pass_10tev = 0
             over_c = 0
             nan_value = 0
             tracks_w_outlier = 0
@@ -261,15 +264,24 @@ if stats is None:
                     print(f"LCIO failed to open reco{ifile}")
                     continue
 
-                for event in reader:
-                    tracks_by_req = {req: [] for req in track_req_names}
-                    for req in track_req_names:
-                        stats[window][req][option]["n_events"] += 1
+                while True:
+                    try:
+                        event = reader.readNextEvent()
+                    except Exception:
+                        break
+
+                    if event is None:
+                        print("No event error")
+                        break
 
                     # stats[window][option]["n_events"] += 1
                     # tracks_by_req = {"vb": [], "ib": [], "ob": []}
 
-                    all_collections = event.getCollectionNames() 
+                    try:
+                        all_collections = event.getCollectionNames() 
+                    except Exception:
+                        print("Skipping invalid/null event")
+                        continue
                     track_collection = event.getCollection("SiTracks") if "SiTracks" in all_collections else None 
                     if not track_collection:
                         print("issue 1")
@@ -277,12 +289,24 @@ if stats is None:
                     test_hit_coll = event.getCollection("VXDBarrelHits")
                     if test_hit_coll is None:
                         continue
+
+                    tracks_by_req = {req: [] for req in track_req_names}
+                    for req in track_req_names:
+                        stats[window]["ob"][option]["n_events"] += 1
+
                     encoding = test_hit_coll.getParameters().getStringVal(EVENT.LCIO.CellIDEncoding)
                     decoder = UTIL.BitField64(encoding)
                     
                     for itrack, track in enumerate(track_collection):
                         total_tracks += 1
 
+                        tan_lambda = track.getTanLambda()
+                        eta = np.arcsinh(tan_lambda)
+                        # eta cut
+                        if abs(eta) > 0.8:
+                            continue
+                        track_pass_eta += 1
+                        
                         chi2 = track.getChi2()
                         ndf = track.getNdf()
                         if ndf == 0:
@@ -292,6 +316,7 @@ if stats is None:
                         # reduced chi2 cut
                         if reduced_chi2 > chi2_cut:
                             continue
+                        track_pass_chi2 += 1
 
                         track_hits = track.getTrackerHits()
 
@@ -338,6 +363,7 @@ if stats is None:
                             track_times.append(corrected_t)
                             track_pos.append(hit_pos)
                         
+                        
                         v_fit, v_err, uw_rms, w_rms, has_outlier = reco_velo_no_intercept(track_times, track_pos, spatial_unc, time_unc) 
                         
                         beta = v_fit / speedoflight
@@ -350,13 +376,6 @@ if stats is None:
                         pZ = reco_pT * track.getTanLambda()
                         p_total = np.sqrt(reco_pT**2 + pZ**2)
 
-                        tan_lambda = track.getTanLambda()
-                        eta = np.arcsinh(tan_lambda)
-                        # eta cut
-                        if abs(eta) > 0.8:
-                            continue
-                        track_pass_eta += 1
-
                         # one hit over 3 sigma cut
                         if has_outlier:
                             tracks_w_outlier += 1
@@ -365,11 +384,6 @@ if stats is None:
                         # if (not np.isfinite(w_rms)) or (w_rms > 1.6):
                         #     continue
                         # track_pass_w_rms += 1
-
-                        # unreasonably high pt cut
-                        # if reco_pT > 10000:
-                        #     track_over_10tev += 1
-                        #     continue
 
                         beta_for_mass = v_fit / speedoflight 
                         
@@ -383,7 +397,7 @@ if stats is None:
                         track_state = track.getTrackStates()[0]
                         d0 = track_state.getD0()
                         z0 = track_state.getZ0()
-
+                        
                         track_info = {
                             "pT": float(reco_pT) if np.isfinite(reco_pT) else np.nan,
                             "beta": float(beta) if np.isfinite(beta) else np.nan,
@@ -402,9 +416,20 @@ if stats is None:
                             #tracks_by_req["ib"].append(track_info)
                             track_ib += 1
                         
-                        if vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2:
-                            tracks_by_req["ob"].append(track_info)
-                            track_ob += 1
+                        # getting rid of all tracks that do not pass this
+                        if not (vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2):
+                            continue
+                        tracks_by_req["ob"].append(track_info)
+                        track_ob += 1
+                        
+                        # unreasonably high pt cut
+                        if reco_pT > 10000:
+                            continue
+                        track_pass_10tev += 1
+
+                        if w_rms > 1.6:
+                            continue
+                        track_pass_w_rms += 1
 
                         if not np.isfinite(mass) or not np.isfinite(reco_pT) or not np.isfinite(beta):
                             nan_value += 1
@@ -453,7 +478,7 @@ if stats is None:
                             d["subleading_w_rms"].append(float("nan"))
 
                 reader.close()
-
+                
                 if (ifile - start + 1) % SAVE_EVERY == 0:
                     with CACHE.open("wb") as f:
                         pickle.dump(stats, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -461,23 +486,28 @@ if stats is None:
 
         print(f"Finished {window}")
 
+        eta_percent = (track_pass_eta / total_tracks) * 100
+        chi2_percent = (track_pass_chi2 / track_pass_eta) * 100
         vb_percent = (track_vb / track_pass_eta) * 100
         ib_percent = (track_ib / track_pass_eta) * 100
         ob_percent = (track_ob / track_pass_eta) * 100
-        overc_percent = (over_c / track_pass_eta) * 100
-
-        print(f"num tracks that have 3 sigma hit: {tracks_w_outlier}")
+        highpt_percent = (track_pass_10tev / track_ob) * 100
+        rms_percent = (track_pass_w_rms / track_pass_10tev) * 100
+        overc_percent = (over_c / track_pass_chi2) * 100
 
         print(f"{window} window stats:")
         print(f"Number of total tracks: {total_tracks}")
-        print(f"Number of tracks passing eta cut: {track_pass_eta}")
-        # print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms}")
-        # print(f"Number of tracks over 10TeV pT: {track_over_10tev}")
-        print(f"Number of tracks rejected because NaN value: {nan_value}")
+        print(f"Number of tracks passing eta cut: {track_pass_eta} (/ total tracks -> {eta_percent:.2f}%)")
+        print(f"Number of tracks passing chi2 cut: {track_pass_chi2} (/ tracks passing eta -> {chi2_percent:.2f}%)")
         print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
         print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
         print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
-        print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta")
+        print(f"Number of tracks passing high pT cut (under 10TeV pT): {track_pass_10tev} (/ tracks passing ob -> {highpt_percent:.2f}%)")
+        print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms} (/ tracks passing high pT -> {rms_percent:.2f}%)")
+        print(f"Number of tracks rejected because NaN value: {nan_value}")
+        print("\n")
+        print(f"num tracks that have 3 sigma hit: {tracks_w_outlier} (after eta and chi2 cuts)")
+        print(f"Number of tracks with speed over c: {over_c} -> {overc_percent:.2f}% of tracks passing eta and chi2")
 
     
 #print(stats["loose"]["ob"]["10_bib"]["leading_w_rms"])
@@ -550,23 +580,23 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
                   tick_major=18, tick_minor=16):
     if bins_cfg is None:
         bins_cfg = {
-            "pT": np.linspace(0, 200, 60),
-            "mass": np.linspace(0, 200, 60),
-            "beta": np.linspace(0.4, 1.02, 60),
+            "pT": np.linspace(0, 3300, 60),
+            "mass": np.linspace(0, 500, 60),
+            "beta": np.linspace(0.8, 1.02, 60),
             "d0": np.linspace(-5, 5, 60),
             "z0": np.linspace(-10, 10, 60),
             "hits": np.linspace(0, 18, 60),
-            "w_rms": np.linspace(0, 2, 60),
+            "w_rms": np.linspace(0, 15, 60),
         }
     if xlims_cfg is None:
         xlims_cfg = {
-            "pT": (0, 200),
-            "mass": (0, 200),
-            "beta": (0.4, 1.02),
+            "pT": (0, 3300),
+            "mass": (0, 500),
+            "beta": (0.8, 1.02),
             "d0": (-5, 5),
             "z0": (-10, 10),
             "hits": (0, 18),
-            "w_rms": (0, 2),
+            "w_rms": (0, 15),
         }
     
     features = [
@@ -585,9 +615,6 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
 
     for key, lead_key, sub_key, xlabel in features:
         fig, ax = plt.subplots(figsize=(8,6))
-
-        print("Leading length:", len(d.get(lead_key, [])))
-        print("Subleading length:", len(d.get(sub_key, [])))
 
         frac_lead = _event_norm_hist(ax, d.get(lead_key, []), 
                                      N_events, bins_cfg[key],
@@ -633,14 +660,24 @@ def plot_log_lead_sub(stats, window, option, req,
                   tick_major=18, tick_minor=16):
     
     features = [
-        ("pT", "leading_pT", "subleading_pT", r"$p_T$ [GeV] - log"),
-        ("mass", "leading_mass", "subleading_mass", r"Mass [GeV] - log"),
-        ("beta", "leading_beta", "subleading_beta", r"$\beta$ - log"),
-        ("d0", "leading_d0", "subleading_d0", r"D0 - log"),
-        ("z0", "leading_z0", "subleading_z0", r"Z0 - log"),
-        ("hits", "leading_hits", "subleading_hits", r"Number of Hits - log"),
-        ("w_rms", "leading_w_rms", "subleading_w_rms", r"Weighted RMS - log"),
+        ("pT", "leading_pT", "subleading_pT", r"$p_T$ [GeV] - log scale"),
+        ("mass", "leading_mass", "subleading_mass", r"Mass [GeV] - log scale"),
+        ("beta", "leading_beta", "subleading_beta", r"$\beta$ - log scale"),
+        ("d0", "leading_d0", "subleading_d0", r"D0 - log scale"),
+        ("z0", "leading_z0", "subleading_z0", r"Z0 - log scale"),
+        ("hits", "leading_hits", "subleading_hits", r"Number of Hits - log scale"),
+        ("w_rms", "leading_w_rms", "subleading_w_rms", r"Weighted RMS - log scale"),
     ]
+
+    log_bins_cfg = {
+        "pT": np.logspace(0, 5, 60),      # 1 → 100000
+        "mass": np.logspace(0, 5, 60),
+        "beta": np.linspace(0.4, 1.02, 60),  # stays linear
+        "d0": np.linspace(-5, 5, 60),
+        "z0": np.linspace(-10, 10, 60),
+        "hits": np.linspace(0, 18, 60),
+        "w_rms": np.linspace(0, 15, 60),
+    }
 
     d = stats[window][req][option]
 
@@ -649,14 +686,14 @@ def plot_log_lead_sub(stats, window, option, req,
     for key, lead_key, sub_key, xlabel in features:
         fig, ax = plt.subplots(figsize=(8,6))
 
-        print("Leading length:", len(d.get(lead_key, [])))
-        print("Subleading length:", len(d.get(sub_key, [])))
+        bins = log_bins_cfg[key]
 
-        frac_lead = _event_norm_hist(ax, d.get(lead_key, []), 
-                                     N_events, 60,
-                                     label="Leading")
-        frac_sub = _event_norm_hist(ax, d.get(sub_key, []), 
-                                    N_events, 60,
+        frac_lead = _event_norm_hist(ax, d.get(lead_key, []),
+                                    N_events, bins,
+                                    label="Leading")
+
+        frac_sub = _event_norm_hist(ax, d.get(sub_key, []),
+                                    N_events, bins,
                                     label="Subleading")
                
         if key == "d0" or key == "z0":
@@ -664,9 +701,9 @@ def plot_log_lead_sub(stats, window, option, req,
             ax.set_ylabel("symlog")
         else:
             ax.set_xscale("log")
-            ax.set_yscale("log") 
+            ax.set_yscale("linear") 
         ax.set_xlabel(xlabel, fontsize=20)
-        ax.set_ylabel("Fraction of events per bin - log", fontsize=20)
+        ax.set_ylabel("Fraction of events per bin", fontsize=20)
 
         ax.tick_params(axis="both", which="major",
                         labelsize=tick_major, length=6, width=1.5)
@@ -705,3 +742,45 @@ with PdfPages("pdf/lead_sub_plots.pdf") as pdf:
 
 
  
+import pickle
+
+with open(CACHE, "rb") as f:
+    stats = pickle.load(f)
+
+d = stats["loose"]["ob"]["bib"]
+
+import numpy as np
+
+def count_valid(arr):
+    arr = np.array(arr, dtype=float)
+    return np.sum(np.isfinite(arr)), len(arr)
+
+print("leading pT:", count_valid(d["leading_pT"]))
+print("leading mass:", count_valid(d["leading_mass"]))
+print("leading beta:", count_valid(d["leading_beta"]))
+
+print("\n")
+
+leading_pT = d["leading_pT"]
+subleading_pT = d["subleading_pT"]
+leading_mass = d["leading_mass"]
+subleading_mass = d["subleading_mass"]
+
+
+print(f"leading pT: {leading_pT}")
+print(f"subleading pT: {subleading_pT}")
+
+print(f"leading mass: {leading_mass}")
+print(f"subleading mass: {subleading_mass}")
+
+print("\n")
+
+max_leadingpT = max(d["leading_pT"])
+max_subleadingpT = max(d["subleading_pT"])
+print(f"max leading pT: {max_leadingpT}")
+print(f"max subleading pT: {max_subleadingpT}")
+
+max_leadingmass = max(d["leading_mass"])
+max_subleadingmass = max(d["subleading_mass"])
+print(f"max leading mass: {max_leadingmass}")
+print(f"max subleading mass: {max_subleadingmass}")
