@@ -20,12 +20,12 @@ from pyLCIO import UTIL, EVENT
 import ROOT
 
 dir = "/ospool/uc-shared/project/futurecolliders/wandriscok/reco/nu_background/"
-#windows = ["loose"]
+windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["10_bib"]
-windows = ["loose", "tight"]
-CACHE = pathlib.Path("nu_bkg_stats.pkl")
-plot_path = "/scratch/wandriscok/kate_mucoll_script/analysis.pdf"
+#windows = ["loose", "tight"]
+CACHE = pathlib.Path("cache/nu_bkg_stats_loose.pkl")
+plot_path = "/scratch/wandriscok/kate_mucoll_script/pdf/analysis.pdf"
 file_ranges = {
     "10_bib": (0, 2500),
     "bib": (4, 10)
@@ -72,7 +72,42 @@ def residual(p, function_type, times, pos, spatial_unc):
     # weighted residuals
     return (function_type(p, times) - pos) / spatial_unc
 
-guess_velo = 290
+guess_velo = 299.8
+
+def fit_rms(p, function_type, times, pos, spatial_unc):
+    x = np.asarray(times, dtype=float)
+    y = np.asarray(pos, dtype=float)
+    s = np.asarray(spatial_unc, dtype=float)
+
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(s) & (s > 0)
+    x, y, s = x[m], y[m], s[m]
+    if x.size == 0:
+        return np.nan, np.nan
+
+    yhat = function_type(p, x)
+    r = yhat - y                
+    rms_unw = float(np.sqrt(np.mean(r*r)))
+    rw = r / s                  
+    rms_w = float(np.sqrt(np.mean(rw*rw)))
+    return rms_unw, rms_w
+
+def time_rms_from_fit(v, t, r, time_unc, b=0.0):
+    t = np.asarray(t, float)
+    r = np.asarray(r, float)
+    st = np.asarray(time_unc, float)
+
+    m = np.isfinite(t) & np.isfinite(r) & np.isfinite(st) & (st > 0)
+    t, r, st = t[m], r[m], st[m]
+    if t.size < 3 or (not np.isfinite(v)) or abs(v) < 1e-12:
+        return np.nan, np.nan
+
+    t_pred = (r - b) / v
+    dt = t - t_pred
+
+    uw_rms_t = float(np.sqrt(np.mean(dt * dt)))          
+    w_rms_t = float(np.sqrt(np.mean((dt / st) ** 2))) 
+    return uw_rms_t, w_rms_t
+
 def reco_velo(function_type, times, pos, spatial_unc):
     x = np.asarray(times, dtype=float)
     y = np.asarray(pos, dtype=float)
@@ -82,7 +117,7 @@ def reco_velo(function_type, times, pos, spatial_unc):
     x, y, s = x[m], y[m], s[m]
 
     if x.size < 3 or np.allclose(x, x.mean()):
-        return np.nan, np.nan
+        return np.nan, np.nan, np.nan, np.nan
 
     p0 = np.array([guess_velo, 0.0])
 
@@ -91,15 +126,7 @@ def reco_velo(function_type, times, pos, spatial_unc):
         args=(function_type, x, y, s),
         jac='2-point'
     )
-    p = fit.x 
-
-    model = function_type(p, x)
-    residuals = (model - y)
-    rms = np.sqrt(np.mean(residuals**2))
-
-    n_outliers = np.sum(np.abs(residuals) > 3 * s)
-    frac_outliers = n_outliers / len(residuals)
-
+    p = fit.x  
     try:
         J = fit.jac
         dof = max(1, x.size - p.size)
@@ -107,10 +134,62 @@ def reco_velo(function_type, times, pos, spatial_unc):
         sigma2 = chi2 / dof
         cov = np.linalg.inv(J.T @ J) * sigma2
         v_err = float(np.sqrt(cov[0, 0]))
+        rms_unw, rms_w = fit_rms(p, function_type, x, y, s)
+
+    except Exception:
+        v_err = np.nan
+        rms_unw, rms_w = np.nan, np.nan
+
+    return float(p[0]), v_err, rms_unw, rms_w
+
+def linearfunc_no_intercept(v, x):
+    return v * x
+def residual_no_intercept(v, times, pos, spatial_unc, time_unc):
+    vv = float(np.atleast_1d(v)[0])
+    s_eff = np.sqrt(np.asarray(spatial_unc, float)**2 + (vv * np.asarray(time_unc, float))**2)
+    return (linearfunc_no_intercept(vv, times) - pos) / s_eff
+
+def reco_velo_no_intercept(times, pos, spatial_unc, time_unc):
+    x = np.asarray(times, dtype=float)
+    y = np.asarray(pos, dtype=float)
+    s = np.asarray(spatial_unc, dtype=float)
+    st = np.asarray(time_unc, dtype=float)
+
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(s) & (s > 0) & np.isfinite(st) & (st > 0)
+    x, y, s, st = x[m], y[m], s[m], st[m]
+
+    if x.size < 3 or np.allclose(x, x.mean()):
+        return np.nan, np.nan, np.nan, np.nan
+
+    v0 = np.array([guess_velo])
+
+    def residual0(v, times, pos, spatial_unc):
+        vv = float(np.atleast_1d(v)[0])
+        return (vv * times - pos) / spatial_unc
+
+    fit = optimize.least_squares(
+        residual0,
+        v0,
+        args=(x, y, s),
+        jac="2-point"
+    )
+
+    v = float(fit.x[0])
+
+    uw_rms_t, w_rms_t = time_rms_from_fit(v, x, y, st, b=0.0)
+
+    try:
+        r = (v * x - y)
+        J = fit.jac
+        dof = max(1, x.size - 1)
+        chi2 = np.sum((r / s) ** 2)
+        sigma2 = chi2 / dof
+        cov = np.linalg.inv(J.T @ J) * sigma2
+        v_err = float(np.sqrt(cov[0, 0]))
     except Exception:
         v_err = np.nan
 
-    return float(p[0]), v_err
+    return v, v_err, uw_rms_t, w_rms_t
 
 stats = None
 if (not rebuild) and os.path.exists(CACHE):
@@ -126,6 +205,7 @@ if stats is None:
                     "pT": [],
                     "hits": [],
                     "velocity": [],
+                    "w_rms": [],
                     "mass": [],
                     "beta": [],
                     "d0": [],
@@ -135,6 +215,7 @@ if stats is None:
                     "pT": [],
                     "hits": [],
                     "velocity": [],
+                    "w_rms": [],
                     "mass": [],
                     "beta": [],
                     "d0": [],
@@ -211,6 +292,7 @@ if stats is None:
                             track_times = []
                             track_pos = []
                             spatial_unc = []
+                            time_unc = []
 
                             for hit in track_hits:
                                 decoder.setValue(int(hit.getCellID0()))
@@ -219,12 +301,15 @@ if stats is None:
                                 if system in (1,2):
                                     vb_hits += 0.5
                                     spatial_unc.append(0.005)
+                                    time_unc.append(0.03)
                                 elif system in (3,4):
                                     ib_hits += 1
                                     spatial_unc.append(0.007)
+                                    time_unc.append(0.06)
                                 elif system in (5,6):
                                     ob_hits += 1
                                     spatial_unc.append(0.007)
+                                    time_unc.append(0.06)
 
                                 hit_time = hit.getTime()
                                 x = hit.getPosition()[0]
@@ -242,8 +327,7 @@ if stats is None:
                                 track_times.append(corrected_t)
                                 track_pos.append(hit_pos)
 
-                            v_fit, v_err = reco_velo(linearfunc, track_times, track_pos, spatial_unc)
-                            
+                            v_fit, v_err, uw_rms, w_rms = reco_velo_no_intercept(track_times, track_pos, spatial_unc, time_unc)
                             
                             # tanlambda = pz/pt
                             # pz = pttanlambda
@@ -285,6 +369,7 @@ if stats is None:
                                 stats[window]["vb"][option]["pT"].append(reco_pT)
                                 stats[window]["vb"][option]["hits"].append(total_hits)
                                 stats[window]["vb"][option]["velocity"].append(v_fit)
+                                stats[window]["vb"][option]["w_rms"].append(w_rms)
                                 stats[window]["vb"][option]["mass"].append(mass)
                                 stats[window]["vb"][option]["beta"].append(beta)
                                 stats[window]["vb"][option]["d0"].append(d0)
@@ -294,6 +379,7 @@ if stats is None:
                                 stats[window]["ib"][option]["pT"].append(reco_pT)
                                 stats[window]["ib"][option]["hits"].append(total_hits)
                                 stats[window]["ib"][option]["velocity"].append(v_fit)
+                                stats[window]["ib"][option]["w_rms"].append(w_rms)
                                 stats[window]["ib"][option]["mass"].append(mass)
                                 stats[window]["ib"][option]["beta"].append(beta)
                                 stats[window]["ib"][option]["d0"].append(d0)
@@ -303,6 +389,7 @@ if stats is None:
                                 stats[window]["ob"][option]["pT"].append(reco_pT)
                                 stats[window]["ob"][option]["hits"].append(total_hits)
                                 stats[window]["ob"][option]["velocity"].append(v_fit)
+                                stats[window]["ob"][option]["w_rms"].append(w_rms)
                                 stats[window]["ob"][option]["mass"].append(mass)
                                 stats[window]["ob"][option]["beta"].append(beta)
                                 stats[window]["ob"][option]["d0"].append(d0)
@@ -341,6 +428,7 @@ if stats is None:
 title_map = {
         "hits": "Hits per Track",
         "velocity": "Reconstructed Velocity",
+        "w_rms": "Weighted RMS For Residuals",
         "pT": "Reconstructed pT",
         "mass": "Reconstructed Mass",
         "beta": "Beta Values [v/c]",
@@ -351,6 +439,7 @@ title_map = {
 xlabel_map = {
         "hits": "Number of Hits",
         "velocity": "Velocity [mm/ns]",
+        "w_rms": "Weighted RMS For Residuals",
         "pT": "pT [GeV]",
         "mass": "Reconstructed mass [GeV]",
         "beta": "Beta",
@@ -398,13 +487,19 @@ def plot_feature(feature, window, option, x_lim=None):
     ]
 
     feature_arrays = get_feature_arrays(feature, window, option)
+
+    for req, arr in zip(track_req_names, feature_arrays):
+        arr_clean = arr[np.isfinite(arr)]
+        if arr_clean.size > 0:
+            print(f"{feature} ({req}) raw min:", np.min(arr_clean),
+                "raw max:", np.max(arr_clean))
     
     if x_lim is not None:
         feature_arrays = [
             arr[(arr >= x_lim[0]) & (arr <= x_lim[1])]
             for arr in feature_arrays
         ]
-
+    
     for ax, arr, title in zip(axes, feature_arrays, titles):
         #print(arr)
         
@@ -416,7 +511,7 @@ def plot_feature(feature, window, option, x_lim=None):
             bins = np.arange(np.min(arr) - 0.5, np.max(arr) + 1.5, 1)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         else:
-            bins = 20
+            bins = 40
 
         ax.hist(arr, bins=bins, weights=weights, histtype="step", 
                 color="grey", fill=True, label="BIB background", 
@@ -483,7 +578,7 @@ def plot_high_pt_feature(feature, window, option, x_lim=None, pt_cut=800):
         if arr.size == 0:
             continue
 
-        print(feature, "min:", np.min(arr), "max:", np.max(arr))
+        print("high pT", feature, "min:", np.min(arr), "max:", np.max(arr))
 
         weights = np.full(arr.size, 100.0 / arr.size)
         if feature == "hits":
@@ -583,8 +678,8 @@ def heat_map(window, option):
     plt.close(fig)
 
 
-with PdfPages('analysis.pdf') as pdf:
-    features = ["hits", "velocity", "pT", "mass"]
+with PdfPages('pdf/analysis.pdf') as pdf:
+    features = ["hits", "velocity", "pT", "mass", "beta", "d0", "z0", "w_rms"]
     for window in windows:
         for option in bib_options:
             plot_feature("pT", window, option, (0,120))
@@ -594,24 +689,26 @@ with PdfPages('analysis.pdf') as pdf:
             plot_feature("beta", window, option, (0, 1.25))
             plot_feature("d0", window, option, (-5, 5))
             plot_feature("z0", window, option, (-10, 10))
+            plot_feature("w_rms", window, option, (0,20))
     print(f"Saved plots to analysis.pdf") 
 
-with PdfPages('heatmap.pdf') as pdf:
+with PdfPages('pdf/heatmap.pdf') as pdf:
     for window in windows:
         for option in bib_options:
             heat_map(window, option)
     print(f"Saved plots to heatmap.pdf")
 
 
-with PdfPages('highpT.pdf') as pdf:
+with PdfPages('pdf/highpT.pdf') as pdf:
     for window in windows:
         for option in bib_options:
             #plot_high_pt_feature("pT", window, option, (800,7000))
-            plot_high_pt_feature("pT", window, option, (800, 100000))
+            plot_high_pt_feature("pT", window, option, x_lim=None)
             plot_high_pt_feature("velocity", window, option, (-200,500))
             plot_high_pt_feature("hits", window, option, (0,18))
             plot_high_pt_feature("mass", window, option, (0,100000))
             plot_high_pt_feature("beta", window, option, (0,1.25))
             plot_high_pt_feature("d0", window, option, (-5,5))
             plot_high_pt_feature("z0", window, option, (-10,10))
+            plot_high_pt_feature("w_rms", window, option, (0,20))
     print(f"Saved plots to highpT.pdf")
