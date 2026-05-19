@@ -251,7 +251,7 @@ def plot_pos(pos: np.ndarray, time: np.ndarray, rchi2: float, v_fit: float, v_in
 nan_count = 0
 # small_v = 0
 
-with PdfPages("pos_plot.pdf") as pdf:
+with PdfPages("pdf/pos_plot.pdf") as pdf:
     for i in tqdm(range(500)):
         pos = stats["position"][i]
         time = stats["time"][i]

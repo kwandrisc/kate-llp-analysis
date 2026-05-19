@@ -31,10 +31,10 @@ def pass_all(t):  return pass_pt(t) and pass_mass(t) and pass_beta(t)
 dir = "/ospool/uc-shared/project/futurecolliders/wandriscok/reco/nu_background/"
 windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
-bib_options = ["10_bib"]
+bib_options = ["bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/bib_event_plot_lead_sub_loose.pkl")
-SAVE_EVERY = 50
+CACHE = pathlib.Path("cache/100_bib_event_loose_6_7.pkl")
+SAVE_EVERY = 2
 file_ranges = {
     "10_bib": (0, 2500),
     "bib": (0, 10)
@@ -398,16 +398,6 @@ if stats is None:
                         d0 = track_state.getD0()
                         z0 = track_state.getZ0()
                         
-                        track_info = {
-                            "pT": float(reco_pT) if np.isfinite(reco_pT) else np.nan,
-                            "beta": float(beta) if np.isfinite(beta) else np.nan,
-                            "mass": float(mass) if np.isfinite(mass) else np.nan,
-                            "hits": float(total_hits),
-                            "d0": float(d0) if np.isfinite(d0) else np.nan,
-                            "z0": float(z0) if np.isfinite(z0) else np.nan,
-                            "w_rms": float(w_rms) if np.isfinite(w_rms) else np.nan
-                        } 
-                        
                         if vb_hits >= 3: 
                             #tracks_by_req["vb"].append(track_info)
                             track_vb += 1
@@ -419,9 +409,8 @@ if stats is None:
                         # getting rid of all tracks that do not pass this
                         if not (vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2):
                             continue
-                        tracks_by_req["ob"].append(track_info)
                         track_ob += 1
-                        
+
                         # unreasonably high pt cut
                         if reco_pT > 10000:
                             continue
@@ -434,6 +423,19 @@ if stats is None:
                         if not np.isfinite(mass) or not np.isfinite(reco_pT) or not np.isfinite(beta):
                             nan_value += 1
                             continue
+                        
+                        track_info = {
+                            "pT": float(reco_pT) if np.isfinite(reco_pT) else np.nan,
+                            "beta": float(beta) if np.isfinite(beta) else np.nan,
+                            "mass": float(mass) if np.isfinite(mass) else np.nan,
+                            "hits": float(total_hits),
+                            "d0": float(d0) if np.isfinite(d0) else np.nan,
+                            "z0": float(z0) if np.isfinite(z0) else np.nan,
+                            "w_rms": float(w_rms) if np.isfinite(w_rms) else np.nan
+                        } 
+                        
+                        tracks_by_req["ob"].append(track_info)
+                    
 
                     for req in ["ob"]:
                         tracks = tracks_by_req[req]
@@ -478,6 +480,8 @@ if stats is None:
                             d["subleading_w_rms"].append(float("nan"))
 
                 reader.close()
+
+                print(f"Total tracks for file {ifile}: {total_tracks}")
                 
                 if (ifile - start + 1) % SAVE_EVERY == 0:
                     with CACHE.open("wb") as f:
