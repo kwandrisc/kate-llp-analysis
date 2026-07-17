@@ -38,7 +38,7 @@ def pass_track_level(t):
         pass_ob_req(t) and
         np.isfinite(t["eta"]) and (abs(t["eta"]) < ETA_MAX) and
         np.isfinite(t["chi2ndf"]) and (t["chi2ndf"] < CHI2NDF_MAX) and
-        np.isfinite(t["pT"]) and (t["pT"] < PT_MAX) and
+        #np.isfinite(t["pT"]) and (t["pT"] < PT_MAX) and
         np.isfinite(t["beta"]) and (0 < t["beta"] < 1) and
         np.isfinite(t["mass"])
     )
@@ -51,7 +51,7 @@ loose_dir =  "/ospool/uc-shared/project/futurecolliders/miralittmann/reco/reder_
 window_to_dir = {"loose": loose_dir}
 n_files = 2500
 
-CACHE = pathlib.Path("cache/stau_leadingsub.pkl") #-nozero
+CACHE = pathlib.Path("cache/stau_leadingsub_invariant_mass.pkl") #-nozero
 
 plot_path = "/scratch/wandriscok/kate_mucoll_scripts/stau_studies/pdf/stau_leadingsub.pdf"
 track_stats_plot_path = "/scratch/wandriscok/kate_mucoll_scripts/stau_studies/pdf/stau_plot.pdf" # -nozero
@@ -282,7 +282,8 @@ if efficiencies is None:
                     "leading_z0": [],
                     "subleading_z0": [],   
                     "leading_vrmsw": [],
-                    "subleading_vrmsw": [] 
+                    "subleading_vrmsw": [] ,
+                    "invariant_mass": []
             } for sample in sample_to_mass.keys()
         } for lifetime in lifetimes
     } 
@@ -339,9 +340,7 @@ if efficiencies is None:
 
                         r_decay = np.sqrt(ep[0]**2 + ep[1]**2)
                         z_decay = ep[2]
-
-
-
+                        
                         related_tracks = nav.getRelatedToObjects(mcp)
 
                         for track in related_tracks:
@@ -420,11 +419,28 @@ if efficiencies is None:
                             else:
                                 m_reco = np.nan
 
-                            try:
-                                tanL = track.getTanLambda()
-                            except Exception:
-                                tanL = np.nan
                             eta = float(np.arcsinh(tanL)) if np.isfinite(tanL) else np.nan
+
+                            if abs(eta) > 0.8:
+                                continue
+
+                            phi = track.getPhi()
+
+                            px = reco_pT * math.cos(phi)
+                            py = reco_pT * math.sin(phi)
+                            pz = reco_pT * tanL
+
+                            p_total = math.sqrt(px**2 + py**2 + pz**2)
+
+                            beta_for_mass = v_fit / speedoflight 
+                            
+                            if (np.isfinite(p_total) and np.isfinite(beta) and 0 < beta <= 1):
+                                energy = math.sqrt(m_reco**2 + p_total**2)
+                            else:
+                                energy = np.nan
+
+                            if not (vb_hits >= 3 and ib_hits >= 2 and ob_hits >=2):
+                                continue
 
                             track_info = {
                                 "pT": float(reco_pT) if np.isfinite(reco_pT) else np.nan,
@@ -438,6 +454,10 @@ if efficiencies is None:
                                 "ib_hits": ib_hits,
                                 "ob_hits": ob_hits,
                                 "eta": eta,
+                                "energy": float(energy),
+                                "px": float(px),
+                                "py": float(py),
+                                "pz": float(pz),
                             }
 
 
@@ -468,6 +488,7 @@ if efficiencies is None:
                         save_info["leading_vrmsw"].append(np.nan)
 
                     if len(passing) >= 2:
+                        lead = passing[0]
                         sub = passing[1]
                         save_info["subleading_pT"].append(sub["pT"])
                         save_info["subleading_beta"].append(sub["beta"])
@@ -475,6 +496,22 @@ if efficiencies is None:
                         save_info["subleading_d0"].append(sub["d0"])
                         save_info["subleading_z0"].append(sub["z0"])
                         save_info["subleading_vrmsw"].append(sub["vrmsw"])
+
+                        # Add the leading and subleading four-vectors
+                        pair_energy = lead["energy"] + sub["energy"]
+                        pair_px = lead["px"] + sub["px"]
+                        pair_py = lead["py"] + sub["py"]
+                        pair_pz = lead["pz"] + sub["pz"]
+
+                        pair_mass_squared = (pair_energy**2 - pair_px**2 - pair_py**2 - pair_pz**2)
+
+                        # Small negative values can occur from floating-point precision
+                        if pair_mass_squared >= -1e-9:
+                            pair_invariant_mass = math.sqrt(max(pair_mass_squared, 0.0))
+                        else:
+                            pair_invariant_mass = np.nan
+
+                        save_info["invariant_mass"].append(pair_invariant_mass)
                     else:
                         save_info["subleading_pT"].append(np.nan)
                         save_info["subleading_beta"].append(np.nan)
@@ -482,6 +519,7 @@ if efficiencies is None:
                         save_info["subleading_d0"].append(np.nan)
                         save_info["subleading_z0"].append(np.nan)
                         save_info["subleading_vrmsw"].append(np.nan)
+                        save_info["invariant_mass"].append(np.nan)
                
                 reader.close()
 
@@ -493,6 +531,23 @@ if efficiencies is None:
 
 print(efficiencies.keys())
 
+
+for lifetime in lifetimes:
+    for sample, stau_mass_tev in sample_to_mass.items():
+        d = efficiencies[lifetime][sample]
+
+        leading = np.asarray(d["leading_pT"], dtype=float)
+        subleading = np.asarray(d["subleading_pT"], dtype=float)
+        invariant = np.asarray(d["invariant_mass"], dtype=float)
+
+        print(
+            f"{stau_mass_tev:.1f} TeV: "
+            f"events={d['n_events']}, "
+            f"leading={np.isfinite(leading).sum()}, "
+            f"subleading={np.isfinite(subleading).sum()}, "
+            f"invariant={np.isfinite(invariant).sum()}"
+        )
+
 labels = {"pT": r"$p_T$ [GeV]",
           "hits": "Hits on track",
           "velo": "Velocity [mm/ns]",
@@ -502,6 +557,7 @@ labels = {"pT": r"$p_T$ [GeV]",
           "subleading_d0": "Subleading D0",
           "leading_z0": "Leading Z0",
           "subleading_z0": "Subleading Z0",
+          "invariant_mass": "Invariant Mass"
           }
 
 
@@ -565,12 +621,15 @@ def print_stau_vrms_summaries(efficiencies, lifetimes, sample_to_mass, reqs=("ob
 # print_stau_vrms_summaries(efficiencies, lifetimes, sample_to_mass, reqs=("ob",))
 
 
+
+###################### all of this plotting here is combining bib, stau, and muon ##################################
+
 STAU_CACHE = pathlib.Path("cache/stau_leadingsub.pkl")
 BIB_CACHE  = pathlib.Path("/scratch/wandriscok/kate_mucoll_scripts/bib_analysis/cache/bib_event_plot_lead_sub_loose.pkl")
 MUON_CACHE = pathlib.Path("/scratch/miralittmann/analysis/mira_analysis_code/cache/mumu_bkg_stats_nominal_nobib_byevent.pkl")
 
-with STAU_CACHE.open("rb") as f:
-    efficiencies = pickle.load(f)
+# with STAU_CACHE.open("rb") as f:
+#     efficiencies = pickle.load(f)
 
 with BIB_CACHE.open("rb") as f:
     bib_stats = pickle.load(f)
@@ -635,7 +694,7 @@ def plot_leading_all_masses_with_bib(
         bins_cfg = {
             "mass":  np.linspace(0, 5500, 61),
             "pT":    np.linspace(0, 7000, 61),
-            "beta":  np.linspace(0.4, 1.05, 53),
+            "beta":  np.linspace(0.4, 1.05, 100),
             "d0":    np.linspace(-0.01, 0.01, 51),
             "z0":    np.linspace(-0.01, 0.01, 51),
             "vrmsw": np.linspace(0, 2, 51),
@@ -730,17 +789,20 @@ def plot_leading_all_masses_with_bib(
                     ax,
                     arr_mu,
                     bins_cfg[feat_key],
-                    label=r"Nominal mu-mu bkg",
+                    label=r"$\mu\mu$ background",
                     color="cornflowerblue",
                     fill=True,
                     alpha=0.22,
                     edgecolor=None
                 )
                 
-                ax.set_xlabel(xlabel, fontsize=16)
-                ax.set_ylabel("Normalized counts (%)", fontsize=16)
+                ax.set_xlabel(xlabel, fontsize=20)
+                ax.set_ylabel("Normalized counts (%)", fontsize=20)
                 #ax.legend(frameon=True, fontsize=10, ncol=2)
-                ax.legend(loc="upper right", frameon=True, fontsize=10, ncol=2)
+                if feat_key == "beta":
+                    ax.legend(loc="lower left", frameon=True, fontsize=14, ncol=1)
+                else:
+                    ax.legend(loc="upper right", frameon=True, fontsize=14, ncol=1)
 
                 if feat_key in xlims_cfg:
                     ax.set_xlim(*xlims_cfg[feat_key])
@@ -755,19 +817,19 @@ def plot_leading_all_masses_with_bib(
                 )
                 ax.text(
                     0.02, 0.93,
-                    f"Leading tracks only, τ = {lifetime} ns",
+                    f"Leading pT tracks only, τ = {lifetime} ns",
                     ha="left", va="top",
                     transform=ax.transAxes, fontsize=12
                 )
                 ax.text(
                     0.02, 0.88,
-                    f"BIB: {window} window, req = {req}",
+                    f"BIB: {window} window, Muons: nominal window",
                     ha="left", va="top",
                     transform=ax.transAxes, fontsize=12
                 )
 
-                ax.tick_params(axis="both", which="major", labelsize=14)
-                ax.tick_params(axis="both", which="minor", labelsize=12)
+                ax.tick_params(axis="both", which="major", labelsize=16, length=6, width=1.5)
+                ax.tick_params(axis="both", which="minor", labelsize=14, length=4, width=1.0)
 
                 fig.tight_layout()
                 pdf.savefig(fig)
@@ -794,3 +856,583 @@ for key in ["leading_d0", "leading_z0", "leading_w_rms"]:
     arr = np.asarray(bib_stats["loose"]["ob"]["10_bib"][key], dtype=float)
     arr = arr[np.isfinite(arr)]
     print(key, len(arr), np.min(arr), np.max(arr), np.median(arr))
+
+#################################################################################################################
+
+
+
+
+
+############## plotting stau invariant masses ##################
+
+
+
+def _event_norm_hist(ax, values, n_events, bins, label):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+
+    if values.size == 0 or n_events <= 0:
+        return 0.0
+
+    weights = np.full(values.size, 1.0 / n_events)
+
+    ax.hist(
+        values,
+        bins=bins,
+        weights=weights,
+        histtype="step",
+        linewidth=2,
+        label=label
+    )
+
+    return values.size / n_events
+
+
+def _add_legend_or_empty_message(ax, message="No selected tracks"):
+    handles, labels = ax.get_legend_handles_labels()
+
+    if handles:
+        ax.legend(
+            handles,
+            labels,
+            frameon=False,
+            fontsize=13,
+            loc="upper right"
+        )
+    else:
+        ax.text(
+            0.5,
+            0.5,
+            message,
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+            fontsize=15,
+            color="gray"
+        )
+
+
+def plot_stau_lead_sub(
+    efficiencies,
+    lifetime,
+    sample,
+    pdf,
+    log_scale=False,
+    tick_major=18,
+    tick_minor=16
+):
+    """
+    Make event-normalized leading/subleading plots and an invariant-mass
+    plot for one stau mass and lifetime.
+    """
+
+    d = efficiencies[lifetime][sample]
+    n_events = int(d.get("n_events", 0))
+    stau_mass_tev = sample_to_mass[sample]
+
+    if log_scale:
+        features = [
+            (
+                "pT",
+                "leading_pT",
+                "subleading_pT",
+                np.logspace(0, 4, 60),
+                r"$p_T$ [GeV]",
+                True
+            ),
+            (
+                "mass",
+                "leading_mass",
+                "subleading_mass",
+                np.logspace(0, 4, 60),
+                r"Reconstructed track mass [GeV]",
+                True
+            ),
+            (
+                "beta",
+                "leading_beta",
+                "subleading_beta",
+                np.linspace(0.0, 1.02, 60),
+                r"$\beta$",
+                False
+            ),
+            (
+                "d0",
+                "leading_d0",
+                "subleading_d0",
+                np.linspace(-5, 5, 60),
+                r"$d_0$ [mm]",
+                False
+            ),
+            (
+                "z0",
+                "leading_z0",
+                "subleading_z0",
+                np.linspace(-10, 10, 60),
+                r"$z_0$ [mm]",
+                False
+            ),
+            (
+                "vrmsw",
+                "leading_vrmsw",
+                "subleading_vrmsw",
+                np.logspace(-2, 2, 60),
+                r"Weighted RMS",
+                True
+            ),
+        ]
+
+    else:
+        features = [
+            (
+                "pT",
+                "leading_pT",
+                "subleading_pT",
+                np.linspace(0, 5500, 60),
+                r"$p_T$ [GeV]",
+                False
+            ),
+            (
+                "mass",
+                "leading_mass",
+                "subleading_mass",
+                np.linspace(0, 5500, 60),
+                r"Reconstructed track mass [GeV]",
+                False
+            ),
+            (
+                "beta",
+                "leading_beta",
+                "subleading_beta",
+                np.linspace(0.0, 1.02, 60),
+                r"$\beta$",
+                False
+            ),
+            (
+                "d0",
+                "leading_d0",
+                "subleading_d0",
+                np.linspace(-5, 5, 60),
+                r"$d_0$ [mm]",
+                False
+            ),
+            (
+                "z0",
+                "leading_z0",
+                "subleading_z0",
+                np.linspace(-10, 10, 60),
+                r"$z_0$ [mm]",
+                False
+            ),
+            (
+                "vrmsw",
+                "leading_vrmsw",
+                "subleading_vrmsw",
+                np.linspace(0, 15, 60),
+                r"Weighted RMS",
+                False
+            ),
+        ]
+
+    for key, lead_key, sub_key, bins, xlabel, use_log_x in features:
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        frac_lead = _event_norm_hist(
+            ax,
+            d.get(lead_key, []),
+            n_events,
+            bins,
+            label="Leading"
+        )
+
+        frac_sub = _event_norm_hist(
+            ax,
+            d.get(sub_key, []),
+            n_events,
+            bins,
+            label="Subleading"
+        )
+
+        if use_log_x:
+            ax.set_xscale("log")
+
+        ax.set_xlabel(xlabel, fontsize=20)
+        ax.set_ylabel("Fraction of events per bin", fontsize=20)
+
+        ax.tick_params(
+            axis="both",
+            which="major",
+            labelsize=tick_major,
+            length=6,
+            width=1.5
+        )
+        ax.tick_params(
+            axis="both",
+            which="minor",
+            labelsize=tick_minor,
+            length=4,
+            width=1.0
+        )
+
+        ax.grid(True, alpha=0.2)
+        _add_legend_or_empty_message(ax)
+
+        ax.text(
+            0.02,
+            0.98,
+            "Muon Collider",
+            ha="left",
+            va="top",
+            transform=ax.transAxes,
+            fontsize=20,
+            fontweight="bold",
+            style="italic"
+        )
+
+        ax.text(
+            0.02,
+            0.93,
+            rf"$m_{{\tilde{{\tau}}}}={stau_mass_tev:.1f}$ TeV, "
+            rf"$c\tau={lifetime}$ mm, Loose",
+            ha="left",
+            va="top",
+            transform=ax.transAxes,
+            fontsize=14
+        )
+
+        ax.text(
+            0.02,
+            0.89,
+            f"N_events={n_events}",
+            ha="left",
+            va="top",
+            transform=ax.transAxes,
+            fontsize=14
+        )
+
+        ax.text(
+            0.98,
+            0.02,
+            f"Frac(events w/ leading) = {frac_lead:.3f}\n"
+            f"Frac(events w/ subleading) = {frac_sub:.3f}",
+            ha="right",
+            va="bottom",
+            transform=ax.transAxes,
+            fontsize=12
+        )
+
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
+    ######  Pair invariant-mass plot ########## 
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    if log_scale:
+        invariant_bins = np.logspace(1, 5, 80)
+    else:
+        invariant_bins = np.linspace(0, 12000, 80)
+
+    frac_pair = _event_norm_hist(
+        ax,
+        d.get("invariant_mass", []),
+        n_events,
+        invariant_bins,
+        label="Leading + subleading tracks"
+    )
+
+    if log_scale:
+        ax.set_xscale("log")
+    else:
+        ax.set_xlim(0, 12000)
+
+        # Expected pair-production energy
+        ax.axvline(
+            10000,
+            color="#800000",
+            linestyle="--",
+            linewidth=2,
+            label=r"$\sqrt{s}=10$ TeV"
+        )
+
+    ax.set_xlabel(
+        r"$m_{\mathrm{lead,sublead}}$ [GeV]",
+        fontsize=20
+    )
+    ax.set_ylabel("Fraction of events per bin", fontsize=20)
+
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=tick_major,
+        length=6,
+        width=1.5
+    )
+    ax.tick_params(
+        axis="both",
+        which="minor",
+        labelsize=tick_minor,
+        length=4,
+        width=1.0
+    )
+
+    ax.grid(True, alpha=0.2)
+
+    _add_legend_or_empty_message(
+        ax,
+        message="No events with at least two selected tracks"
+    )
+
+    ax.text(
+        0.02,
+        0.98,
+        "Muon Collider",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=20,
+        fontweight="bold",
+        style="italic"
+    )
+
+    ax.text(
+        0.02,
+        0.93,
+        rf"$m_{{\tilde{{\tau}}}}={stau_mass_tev:.1f}$ TeV, "
+        rf"$c\tau={lifetime}$ mm, Loose",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=14
+    )
+
+    ax.text(
+        0.02,
+        0.89,
+        f"N_events={n_events}",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=14
+    )
+
+    ax.text(
+        0.98,
+        0.02,
+        f"Frac(events w/ pair) = {frac_pair:.3f}",
+        ha="right",
+        va="bottom",
+        transform=ax.transAxes,
+        fontsize=12
+    )
+
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+os.makedirs("pdf", exist_ok=True)
+
+with PdfPages("pdf/stau_leading_subleading_plots.pdf") as pdf:
+    for lifetime in lifetimes:
+        for sample in sample_to_mass:
+            plot_stau_lead_sub(
+                efficiencies=efficiencies,
+                lifetime=lifetime,
+                sample=sample,
+                pdf=pdf,
+                log_scale=False,
+                tick_major=20,
+                tick_minor=18
+            )
+
+            plot_stau_lead_sub(
+                efficiencies=efficiencies,
+                lifetime=lifetime,
+                sample=sample,
+                pdf=pdf,
+                log_scale=True,
+                tick_major=20,
+                tick_minor=18
+            )
+
+print(
+    "Saved stau leading/subleading and invariant-mass plots to pdf/stau_leading_subleading_plots.pdf"
+)
+
+
+############ overlay#####################
+
+def plot_stau_invariant_mass_overlay(
+    efficiencies,
+    lifetime,
+    pdf=None,
+    log_scale=False,
+    tick_major=18,
+    tick_minor=16
+):
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    if log_scale:
+        bins = np.logspace(1, 5, 80)  # 10 GeV to 100 TeV
+    else:
+        bins = np.linspace(0, 12000, 80)  # 0 to 12 TeV
+
+    for sample, stau_mass_tev in sample_to_mass.items():
+        d = efficiencies[lifetime][sample]
+        n_events = int(d.get("n_events", 0))
+
+        invariant_masses = np.asarray(
+            d.get("invariant_mass", []),
+            dtype=float
+        )
+
+        invariant_masses = invariant_masses[
+            np.isfinite(invariant_masses)
+        ]
+
+        if invariant_masses.size == 0 or n_events <= 0:
+            print(
+                f"No valid invariant masses for "
+                f"m_stau={stau_mass_tev:.1f} TeV, "
+                f"ctau={lifetime} mm"
+            )
+            continue
+
+        # Normalize to the total number of processed events
+        weights = np.full(
+            invariant_masses.size,
+            1.0 / n_events,
+            dtype=float
+        )
+
+        ax.hist(
+            invariant_masses,
+            bins=bins,
+            weights=weights,
+            histtype="step",
+            linewidth=2,
+            label=rf"$m_{{\tilde{{\tau}}}}={stau_mass_tev:.1f}$ TeV"
+        )
+
+    if log_scale:
+        ax.set_xscale("log")
+    else:
+        ax.set_xlim(0, 12000)
+
+    # Expected stau-pair invariant mass at a 10 TeV collider
+    ax.axvline(
+        10000,
+        color="black",
+        linestyle="--",
+        linewidth=2,
+        label=r"$\sqrt{s}=10$ TeV"
+    )
+
+    ax.set_xlabel(
+        r"$m_{\mathrm{lead,sublead}}$ [GeV]",
+        fontsize=20
+    )
+    ax.set_ylabel(
+        "Fraction of events per bin",
+        fontsize=20
+    )
+
+    ax.tick_params(
+        axis="both",
+        which="major",
+        labelsize=tick_major,
+        length=6,
+        width=1.5
+    )
+    ax.tick_params(
+        axis="both",
+        which="minor",
+        labelsize=tick_minor,
+        length=4,
+        width=1.0
+    )
+
+    ax.grid(True, alpha=0.2)
+
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(
+            handles,
+            labels,
+            frameon=False,
+            fontsize=13,
+            loc="upper left",
+            bbox_to_anchor=(1.02, 1.0)
+        )
+
+    ax.text(
+        0.02,
+        0.98,
+        "Muon Collider",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=20,
+        fontweight="bold",
+        style="italic"
+    )
+
+    ax.text(
+        0.02,
+        0.93,
+        rf"Stau signal, $c\tau={lifetime}$ mm, Loose",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=14
+    )
+
+    ax.text(
+        0.02,
+        0.89,
+        f"N_events={n_events}",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=14
+    )
+
+    fig.tight_layout()
+
+    if pdf is not None:
+        pdf.savefig(fig)
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+
+
+os.makedirs("pdf", exist_ok=True)
+
+with PdfPages("pdf/stau_invariant_mass_overlay.pdf") as pdf:
+    for lifetime in lifetimes:
+        plot_stau_invariant_mass_overlay(
+            efficiencies=efficiencies,
+            lifetime=lifetime,
+            pdf=pdf,
+            log_scale=False,
+            tick_major=20,
+            tick_minor=18
+        )
+
+        plot_stau_invariant_mass_overlay(
+            efficiencies=efficiencies,
+            lifetime=lifetime,
+            pdf=pdf,
+            log_scale=True,
+            tick_major=20,
+            tick_minor=18
+        )
+
+print(
+    "Saved invariant-mass overlays to "
+    "pdf/stau_invariant_mass_overlay.pdf"
+)
