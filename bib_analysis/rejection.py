@@ -19,24 +19,15 @@ import pyLCIO
 from pyLCIO import UTIL, EVENT
 import ROOT
 
-# DEFINING CUTS 
-PT_MIN   = 0
-MASS_MIN = 0
-BETA_MAX = 1.0
-def pass_pt(t):   return np.isfinite(t["pT"])   and (t["pT"]   > PT_MIN)
-def pass_mass(t): return np.isfinite(t["mass"]) and (t["mass"] > MASS_MIN)
-def pass_beta(t): return np.isfinite(t["beta"]) and (t["beta"] < BETA_MAX)
-def pass_all(t):  return pass_pt(t) and pass_mass(t) and pass_beta(t)
-
 STAU_CUTS = {
-    1.0:  {"pt_min": 1500, "beta_min": 0.95, "beta_max": 0.983},
-    1.5:  {"pt_min": 2000, "beta_min": 0.90, "beta_max": 0.98},
-    2.0:  {"pt_min": 2000, "beta_min": 0.85, "beta_max": 0.95},
-    2.5:  {"pt_min": 2000, "beta_min": 0.80, "beta_max": 0.90},
-    3.0:  {"pt_min": 2000, "beta_min": 0.70, "beta_max": 0.85},
-    3.5:  {"pt_min": 2000, "beta_min": 0.65, "beta_max": 0.80},
-    4.0:  {"pt_min": 1900, "beta_min": 0.55, "beta_max": 0.70},
-    4.5:  {"pt_min": 1400, "beta_min": 0.40, "beta_max": 0.55},
+    1.0:  {"pt_min": 1500, "beta_min": 0.95, "beta_max": 0.983, "mass_min": 500, "mass_max": 10000},
+    1.5:  {"pt_min": 2000, "beta_min": 0.90, "beta_max": 0.98, "mass_min": 1000, "mass_max": 10000},
+    2.0:  {"pt_min": 2000, "beta_min": 0.85, "beta_max": 0.95, "mass_min": 1500, "mass_max": 10000},
+    2.5:  {"pt_min": 2000, "beta_min": 0.80, "beta_max": 0.90, "mass_min": 2000, "mass_max": 10000},
+    3.0:  {"pt_min": 2000, "beta_min": 0.70, "beta_max": 0.85, "mass_min": 2000, "mass_max": 10000},
+    3.5:  {"pt_min": 2000, "beta_min": 0.65, "beta_max": 0.80, "mass_min": 2900, "mass_max": 10000},
+    4.0:  {"pt_min": 1900, "beta_min": 0.55, "beta_max": 0.70, "mass_min": 3200, "mass_max": 10000},
+    4.5:  {"pt_min": 1400, "beta_min": 0.40, "beta_max": 0.55, "mass_min": 3500, "mass_max": 10000},
 }
 
 WRMS_CUT = 1.6
@@ -44,11 +35,12 @@ PT_MAX = 10000
 
 
 dir = "/ospool/uc-shared/project/futurecolliders/wandriscok/reco/nu_background/"
+#windows = ["tight", "medium"]
 windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
 bib_options = ["bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/100_bib_event_rejection_loose_stauwindows.pkl")
+CACHE = pathlib.Path("cache/100_bib_event_rejection_loose_stauwindows_withmass1.pkl")
 SAVE_EVERY = 2
 file_ranges = {
     "10_bib": (0, 2500),
@@ -235,7 +227,8 @@ if stats is None:
                 "n_events": 0,   # total processed events
                 "total_tracks": 0, "pass_chi2": 0,
                 "pass_eta": 0, "pass_ob": 0,
-                "pass_pT_window": 0, "pass_wrms": 0
+                "pass_pT_window": 0, "pass_wrms": 0,
+                "pass_mass": 0
             } for option in bib_options
         } for window in windows
     }
@@ -268,6 +261,7 @@ if stats is None:
                     "quality_wrms": 0,
                     "quality_pt": 0,
                     "quality_beta": 0,
+                    "quality_mass": 0,
                     "candidate_tracks": 0,
                     "events_ge1_candidate": 0,
                     "events_ge2_candidate": 0,
@@ -330,7 +324,7 @@ if stats is None:
 
                     n_candidates_this_event = {mass: 0 for mass in STAU_CUTS}
                     for itrack, track in enumerate(track_collection):
-                        ###  all of the cuts in this script are reversed, getting the number that PASS each cut
+                        ## all cuts in this script reversed, getting number that PASS each cut
                         
                         total_tracks += 1
 
@@ -410,9 +404,9 @@ if stats is None:
                         beta_for_mass = v_fit / speedoflight 
                         
                         if np.isfinite(reco_pT) and np.isfinite(beta_for_mass) and (0 < beta_for_mass <= 1):
-                            mass = p_total * math.sqrt(1.0/(beta_for_mass*beta_for_mass) - 1.0)
+                            reco_mass = p_total * math.sqrt(1.0/(beta_for_mass*beta_for_mass) - 1.0)
                         else:
-                            mass = np.nan
+                            reco_mass = np.nan
                         
                         total_hits = vb_hits + ib_hits + ob_hits
 
@@ -439,81 +433,54 @@ if stats is None:
                         preselection = passes_eta and passes_chi2 and passes_ob
 
                         if preselection:
-                            for mass, cuts in STAU_CUTS.items():
+                            for stau_mass, cuts in STAU_CUTS.items():
 
                                 passes_wrms = np.isfinite(w_rms) and (w_rms <= WRMS_CUT)
 
-                                passes_stau_pt = (
-                                    np.isfinite(reco_pT)
-                                    and (reco_pT >= cuts["pt_min"])
-                                    and (reco_pT <= PT_MAX)
-                                )
+                                passes_stau_pt = (np.isfinite(reco_pT) and (reco_pT >= cuts["pt_min"]) and (reco_pT <= PT_MAX))
 
-                                passes_stau_beta = (
-                                    np.isfinite(beta)
-                                    and (cuts["beta_min"] <= beta <= cuts["beta_max"])
-                                )
+                                passes_stau_beta = (np.isfinite(beta) and (cuts["beta_min"] <= beta <= cuts["beta_max"]))
 
-                                passes_Y = passes_stau_pt and passes_stau_beta
+                                passes_stau_mass = (np.isfinite(reco_mass) and (cuts["mass_min"] <= reco_mass <= cuts["mass_max"]))
+
+                                passes_Y = passes_stau_pt and passes_stau_beta and passes_stau_mass
                                 is_candidate = passes_wrms and passes_Y
 
-                                mass_stats[mass]["quality"] += 1
+                                mass_stats[stau_mass]["quality"] += 1
 
                                 if passes_wrms:
-                                    mass_stats[mass]["quality_wrms"] += 1
+                                    mass_stats[stau_mass]["quality_wrms"] += 1
 
                                 if passes_stau_pt:
-                                    mass_stats[mass]["quality_pt"] += 1
+                                    mass_stats[stau_mass]["quality_pt"] += 1
 
                                 if passes_stau_beta:
-                                    mass_stats[mass]["quality_beta"] += 1
+                                    mass_stats[stau_mass]["quality_beta"] += 1
+
+                                if passes_stau_mass:
+                                    mass_stats[stau_mass]["quality_mass"] += 1
 
                                 if is_candidate:
-                                    mass_stats[mass]["candidate_tracks"] += 1
-                                    n_candidates_this_event[mass] += 1
+                                    mass_stats[stau_mass]["candidate_tracks"] += 1
+                                    n_candidates_this_event[stau_mass] += 1
 
-                                # ABCD:
                                 # X = pass wrms
-                                # Y = pass stau pT AND beta
+                                # Y = pass pT AND beta AND mass
                                 if passes_wrms and passes_Y:
-                                    mass_stats[mass]["A"] += 1
+                                    mass_stats[stau_mass]["A"] += 1
                                 elif passes_wrms and (not passes_Y):
-                                    mass_stats[mass]["B"] += 1
+                                    mass_stats[stau_mass]["B"] += 1
                                 elif (not passes_wrms) and passes_Y:
-                                    mass_stats[mass]["C"] += 1
+                                    mass_stats[stau_mass]["C"] += 1
                                 else:
-                                    mass_stats[mass]["D"] += 1
+                                    mass_stats[stau_mass]["D"] += 1
                         
-                    
-                        
-                    #     # ABCD only among tracks that already pass eta, chi2, and OB
-                    #     if preselection:
+                    for stau_mass in STAU_CUTS:
+                        if n_candidates_this_event[stau_mass] >= 1:
+                            mass_stats[stau_mass]["events_ge1_candidate"] += 1
 
-                    #         if passes_pT and passes_wrms:
-                    #             abcd_A += 1
-                    #             n_fake_tracks_this_event += 1
-
-                    #         elif (not passes_pT) and passes_wrms:
-                    #             abcd_B += 1
-
-                    #         elif passes_pT and (not passes_wrms):
-                    #             abcd_C += 1
-
-                    #         else:
-                    #             abcd_D += 1
-
-                    # if n_fake_tracks_this_event >= 1:
-                    #     events_ge1_fake += 1
-
-                    # if n_fake_tracks_this_event >= 2:
-                    #     events_ge2_fake += 1
-
-                    for mass in STAU_CUTS:
-                        if n_candidates_this_event[mass] >= 1:
-                            mass_stats[mass]["events_ge1_candidate"] += 1
-
-                        if n_candidates_this_event[mass] >= 2:
-                            mass_stats[mass]["events_ge2_candidate"] += 1
+                        if n_candidates_this_event[stau_mass] >= 2:
+                            mass_stats[stau_mass]["events_ge2_candidate"] += 1
 
                 reader.close()
 
@@ -550,16 +517,17 @@ if stats is None:
                 print(f"Tracks passing quality + wRMS < {WRMS_CUT}: {s['quality_wrms']}")
                 print(f"Tracks passing quality + pT >= {STAU_CUTS[mass]['pt_min']}: {s['quality_pt']}")
                 print(f"Tracks passing quality + beta window: {s['quality_beta']}")
+                print(f"Tracks passing quality + mass window: {s['quality_mass']}")
                 print(f"Candidate tracks: {s['candidate_tracks']}")
 
                 print(f"Events with >=1 candidate track: {s['events_ge1_candidate']}")
                 print(f"Events with >=2 candidate tracks: {s['events_ge2_candidate']}")
 
                 print("ABCD:")
-                print(f"A = pass wRMS, pass pT+beta: {A}")
-                print(f"B = pass wRMS, fail pT+beta: {B}")
-                print(f"C = fail wRMS, pass pT+beta: {C}")
-                print(f"D = fail wRMS, fail pT+beta: {D}")
+                print(f"A = pass wRMS, pass pT+beta+mass: {A}")
+                print(f"B = pass wRMS, fail pT+beta+mass: {B}")
+                print(f"C = fail wRMS, pass pT+beta+mass: {C}")
+                print(f"D = fail wRMS, fail pT+beta+mass: {D}")
                 print(f"A_pred = B*C/D = {A_pred}")
                 print(f"A_obs / A_pred = {ratio}")
 
@@ -584,31 +552,7 @@ if stats is None:
         print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms} (/ total tracks -> {rms_percent:.2f}%)")
 
         print("\n")
-        
-        # NA = abcd_A
-        # NB = abcd_B
-        # NC = abcd_C
-        # ND = abcd_D
-
-        # NA_pred = NB * NC / ND if ND > 0 else np.nan
-
-        # print("ABCD results:")
-        # print(f"A observed pass pT, pass wrms: {NA}")
-        # print(f"B fail pT, pass wrms: {NB}")
-        # print(f"C pass pT, fail wrms: {NC}")
-        # print(f"D fail pT, fail wrms: {ND}")
-        # print(f"A predicted from ABCD = B*C/D = {NA_pred}")
-        # print(f"A observed / predicted = {NA / NA_pred if NA_pred > 0 else np.nan}")
-
-        # P_ge1_fake = events_ge1_fake / stats[window][option]["n_events"]
-        # P_ge2_fake = events_ge2_fake / stats[window][option]["n_events"]
-
-        # print("Event-level fake probabilities:")
-        # print(f"Events with >=1 fake BIB track: {events_ge1_fake}")
-        # print(f"Events with >=2 fake BIB tracks: {events_ge2_fake}")
-        # print(f"P(>=1 fake per event) = {P_ge1_fake}")
-        # print(f"P(>=2 fake per event) = {P_ge2_fake}")
-
+      
     
 #print(stats["loose"]["ob"]["10_bib"]["leading_w_rms"])
 CACHE.parent.mkdir(exist_ok=True)
@@ -620,97 +564,57 @@ print("Saved cache successfully.")
 #print(stats["medium"]["bib"])
 
 
-# for window in ["loose"]:
-#     for option in bib_options:
-#         total_tracks = stats[window][option]["total_tracks"]
-#         track_pass_chi2 = stats[window][option]["pass_chi2"]
-#         track_pass_eta = stats[window][option]["pass_eta"]
-#         track_pass_ob = stats[window][option]["pass_ob"]
-#         track_pass_pT_window = stats[window][option]["pass_pT_window"]
-#         track_pass_w_rms = stats[window][option]["pass_wrms"]
-
-#         eta_percent = (track_pass_eta / total_tracks) * 100
-#         chi2_percent = (track_pass_chi2 / total_tracks) * 100
-#         ob_percent = (track_pass_ob / total_tracks) * 100
-#         highpt_percent = (track_pass_pT_window / total_tracks) * 100
-
-
-#         print(f"{window} window stats:")
-#         print(f"Number of total tracks: {total_tracks}")
-#         print(f"Number of tracks passing eta cut: {track_pass_eta} (/ total tracks -> {eta_percent:.2f}%)")
-#         print(f"Number of tracks passing chi2 cut: {track_pass_chi2} (/ total tracks -> {chi2_percent:.2f}%)")
-#         print(f"Outer cut: {track_pass_ob} / {total_tracks} -> {ob_percent:.2f}%")
-#         print(f"Number of tracks passing high pT cut (under 10TeV pT): {track_pass_pT_window} (/ total tracks -> {highpt_percent:.2f}%)")
-#         print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms} (/ total tracks -> {rms_percent:.2f}%)")
-
-
-
-
-import pickle
-import numpy as np
-
-CACHE = "cache/100_bib_event_rejection_loose_stauwindows.pkl"
-
-STAU_CUTS = {
-    1.0:  {"pt_min": 1500, "beta_min": 0.95, "beta_max": 0.983},
-    1.5:  {"pt_min": 2000, "beta_min": 0.90, "beta_max": 0.98},
-    2.0:  {"pt_min": 2000, "beta_min": 0.85, "beta_max": 0.95},
-    2.5:  {"pt_min": 2000, "beta_min": 0.80, "beta_max": 0.90},
-    3.0:  {"pt_min": 2000, "beta_min": 0.70, "beta_max": 0.85},
-    3.5:  {"pt_min": 2000, "beta_min": 0.65, "beta_max": 0.80},
-    4.0:  {"pt_min": 1900, "beta_min": 0.55, "beta_max": 0.70},
-    4.5:  {"pt_min": 1400, "beta_min": 0.40, "beta_max": 0.55},
-}
-
-WRMS_CUT = 1.6
-
 with open(CACHE, "rb") as f:
     stats = pickle.load(f)
 
-window = "loose"
+# window = "medium"
 option = "bib"
 
-mass_stats = stats[window][option]["stau_mass_stats"]
+for window in windows:
+    print(f"-----------{window} window ----------")
+    mass_stats = stats[window][option]["stau_mass_stats"]
 
-for mass, s in mass_stats.items():
+    for mass, s in mass_stats.items():
 
-    n_events = stats[window][option]["n_events"]
+        n_events = stats[window][option]["n_events"]
 
-    A = s["A"]
-    B = s["B"]
-    C = s["C"]
-    D = s["D"]
+        A = s["A"]
+        B = s["B"]
+        C = s["C"]
+        D = s["D"]
 
-    A_pred = B * C / D if D > 0 else np.nan
-    ratio = A / A_pred if A_pred > 0 else np.nan
+        A_pred = B * C / D if D > 0 else np.nan
+        ratio = A / A_pred if A_pred > 0 else np.nan
 
-    print(f"\n=== Stau mass {mass} TeV ===")
-    print(f"Tracks passing baseline quality cuts: {s['quality']}")
-    print(f"Tracks passing quality + wRMS < {WRMS_CUT}: {s['quality_wrms']}")
-    print(f"Tracks passing quality + pT >= {STAU_CUTS[mass]['pt_min']}: {s['quality_pt']}")
-    print(f"Tracks passing quality + beta window: {s['quality_beta']}")
-    print(f"Candidate tracks: {s['candidate_tracks']}")
+        print(f"\n=== Stau mass {mass} TeV ===")
+        print(f"Tracks passing baseline quality cuts: {s['quality']}")
+        print(f"Tracks passing quality + wRMS < {WRMS_CUT}: {s['quality_wrms']}")
+        print(f"Tracks passing quality + pT >= {STAU_CUTS[mass]['pt_min']}: {s['quality_pt']}")
+        print(f"Tracks passing quality + beta window: {s['quality_beta']}")
+        print(f"Candidate tracks: {s['candidate_tracks']}")
 
-    print(f"Events with >=1 candidate track: {s['events_ge1_candidate']}")
-    print(f"Events with >=2 candidate tracks: {s['events_ge2_candidate']}")
+        print(f"Events with >=1 candidate track: {s['events_ge1_candidate']}")
+        print(f"Events with >=2 candidate tracks: {s['events_ge2_candidate']}")
 
-    print("ABCD:")
-    print(f"A = pass wRMS, pass pT+beta: {A}")
-    print(f"B = pass wRMS, fail pT+beta: {B}")
-    print(f"C = fail wRMS, pass pT+beta: {C}")
-    print(f"D = fail wRMS, fail pT+beta: {D}")
-    print(f"A_pred = B*C/D = {A_pred}")
-    print(f"A_obs / A_pred = {ratio}")
+        print("ABCD:")
+        print(f"A = pass wRMS, pass pT+beta: {A}")
+        print(f"B = pass wRMS, fail pT+beta: {B}")
+        print(f"C = fail wRMS, pass pT+beta: {C}")
+        print(f"D = fail wRMS, fail pT+beta: {D}")
+        print(f"A_pred = B*C/D = {A_pred}")
+        print(f"A_obs / A_pred = {ratio}")
 
-    if n_events > 0:
-        print(f"P(>=1 candidate/event) = {s['events_ge1_candidate'] / n_events}")
-        print(f"P(>=2 candidates/event) = {s['events_ge2_candidate'] / n_events}")
+        if n_events > 0:
+            print(f"P(>=1 candidate/event) = {s['events_ge1_candidate'] / n_events}")
+            print(f"P(>=2 candidates/event) = {s['events_ge2_candidate'] / n_events}")
 
-        lambda_per_event = A_pred / n_events if np.isfinite(A_pred) else np.nan
+            lambda_per_event = A_pred / n_events if np.isfinite(A_pred) else np.nan
 
-        P_ge1_poisson = 1 - np.exp(-lambda_per_event)
-        P_ge2_poisson = 1 - np.exp(-lambda_per_event) * (1 + lambda_per_event)
+            P_ge1_poisson = 1 - np.exp(-lambda_per_event)
+            P_ge2_poisson = 1 - np.exp(-lambda_per_event) * (1 + lambda_per_event)
+            tot_events = P_ge2_poisson * (1.5 * 10**12)
 
-        print(f"Poisson lambda/event from ABCD A_pred = {lambda_per_event}")
-        print(f"Poisson P(>=1 fake candidate/event) = {P_ge1_poisson}")
-        print(f"Poisson P(>=2 fake candidates/event) = {P_ge2_poisson}")
+            print(f"Poisson lambda/event from ABCD A_pred = {lambda_per_event}")
+            print(f"Poisson P(>=1 fake candidate/event) = {P_ge1_poisson}")
+            print(f"Poisson P(>=2 fake candidates/event) = {P_ge2_poisson}")
+            print(f"Number of total events with >=2 candidates = {tot_events}")
