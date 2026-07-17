@@ -31,10 +31,10 @@ def pass_all(t):  return pass_pt(t) and pass_mass(t) and pass_beta(t)
 dir = "/ospool/uc-shared/project/futurecolliders/wandriscok/reco/nu_background/"
 windows = ["loose"]
 #bib_options = ["10_bib", "bib"]
-bib_options = ["bib"]
+bib_options = ["10_bib"]
 #windows = ["loose", "tight"]
-CACHE = pathlib.Path("cache/100_bib_event_loose_6_7.pkl")
-SAVE_EVERY = 2
+CACHE = pathlib.Path("cache/10_bib_event_loose_invariant_mass.pkl")
+SAVE_EVERY = 50
 file_ranges = {
     "10_bib": (0, 2500),
     "bib": (0, 10)
@@ -226,6 +226,7 @@ if stats is None:
                     "leading_d0": [], "subleading_d0": [],
                     "leading_z0": [], "subleading_z0": [],
                     "leading_w_rms": [], "subleading_w_rms": [],
+                    "pair_invariant_mass": [],
                 } for option in bib_options
             } for req in track_req_names
         } for window in windows
@@ -278,10 +279,15 @@ if stats is None:
                     # tracks_by_req = {"vb": [], "ib": [], "ob": []}
 
                     try:
-                        all_collections = event.getCollectionNames() 
-                    except Exception:
-                        print("Skipping invalid/null event")
-                        continue
+                        all_collections = event.getCollectionNames()
+                    except ReferenceError:
+                        break
+                    except Exception as e:
+                        print(
+                            f"Reached invalid/end-of-file event in reco{ifile}: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        break
                     track_collection = event.getCollection("SiTracks") if "SiTracks" in all_collections else None 
                     if not track_collection:
                         print("issue 1")
@@ -373,8 +379,23 @@ if stats is None:
                             v_fit = speedoflight
                             over_c += 1
 
-                        pZ = reco_pT * track.getTanLambda()
-                        p_total = np.sqrt(reco_pT**2 + pZ**2)
+                        tan_lambda = track.getTanLambda()
+                        phi = track.getPhi()
+
+                        px = reco_pT * math.cos(phi)
+                        py = reco_pT * math.sin(phi)
+                        pz = reco_pT * tan_lambda
+
+                        p_total = math.sqrt(px**2 + py**2 + pz**2)
+
+                        beta_for_mass = v_fit / speedoflight 
+                        
+                        if (np.isfinite(p_total) and np.isfinite(beta) and 0 < beta <= 1):
+                            mass = p_total * math.sqrt(1.0 / beta**2 - 1.0)
+                            energy = math.sqrt(mass**2 + p_total**2)
+                        else:
+                            mass = np.nan
+                            energy = np.nan
 
                         # one hit over 3 sigma cut
                         if has_outlier:
@@ -384,13 +405,7 @@ if stats is None:
                         # if (not np.isfinite(w_rms)) or (w_rms > 1.6):
                         #     continue
                         # track_pass_w_rms += 1
-
-                        beta_for_mass = v_fit / speedoflight 
                         
-                        if np.isfinite(reco_pT) and np.isfinite(beta_for_mass) and (0 < beta_for_mass <= 1):
-                            mass = p_total * math.sqrt(1.0/(beta_for_mass*beta_for_mass) - 1.0)
-                        else:
-                            mass = np.nan
                         
                         total_hits = vb_hits + ib_hits + ob_hits
 
@@ -412,27 +427,31 @@ if stats is None:
                         track_ob += 1
 
                         # unreasonably high pt cut
-                        if reco_pT > 10000:
-                            continue
-                        track_pass_10tev += 1
+                        # if reco_pT > 10000:
+                        #     continue
+                        # track_pass_10tev += 1
 
-                        if w_rms > 1.6:
-                            continue
-                        track_pass_w_rms += 1
+                        # if w_rms > 1.6:
+                        #     continue
+                        # track_pass_w_rms += 1
 
                         if not np.isfinite(mass) or not np.isfinite(reco_pT) or not np.isfinite(beta):
                             nan_value += 1
                             continue
                         
                         track_info = {
-                            "pT": float(reco_pT) if np.isfinite(reco_pT) else np.nan,
-                            "beta": float(beta) if np.isfinite(beta) else np.nan,
-                            "mass": float(mass) if np.isfinite(mass) else np.nan,
+                            "pT": float(reco_pT),
+                            "beta": float(beta),
+                            "mass": float(mass),
+                            "energy": float(energy),
+                            "px": float(px),
+                            "py": float(py),
+                            "pz": float(pz),
                             "hits": float(total_hits),
                             "d0": float(d0) if np.isfinite(d0) else np.nan,
                             "z0": float(z0) if np.isfinite(z0) else np.nan,
-                            "w_rms": float(w_rms) if np.isfinite(w_rms) else np.nan
-                        } 
+                            "w_rms": float(w_rms) if np.isfinite(w_rms) else np.nan,
+                        }
                         
                         tracks_by_req["ob"].append(track_info)
                     
@@ -462,7 +481,9 @@ if stats is None:
                             d["leading_w_rms"].append(float("nan"))
 
                         if len(tracks) >= 2:
+                            lead = tracks[0]
                             sub = tracks[1]
+
                             d["subleading_mass"].append(sub["mass"])
                             d["subleading_pT"].append(sub["pT"])
                             d["subleading_beta"].append(sub["beta"])
@@ -470,6 +491,23 @@ if stats is None:
                             d["subleading_d0"].append(sub["d0"])
                             d["subleading_z0"].append(sub["z0"])
                             d["subleading_w_rms"].append(sub["w_rms"])
+
+                            # Add the leading and subleading four-vectors
+                            pair_energy = lead["energy"] + sub["energy"]
+                            pair_px = lead["px"] + sub["px"]
+                            pair_py = lead["py"] + sub["py"]
+                            pair_pz = lead["pz"] + sub["pz"]
+
+                            pair_mass_squared = (pair_energy**2 - pair_px**2 - pair_py**2 - pair_pz**2)
+
+                            # Small negative values can occur from floating-point precision
+                            if pair_mass_squared >= -1e-9:
+                                pair_invariant_mass = math.sqrt(max(pair_mass_squared, 0.0))
+                            else:
+                                pair_invariant_mass = np.nan
+
+                            d["pair_invariant_mass"].append(pair_invariant_mass)
+
                         else:
                             d["subleading_mass"].append(float("nan"))
                             d["subleading_pT"].append(float("nan"))
@@ -479,9 +517,11 @@ if stats is None:
                             d["subleading_z0"].append(float("nan"))
                             d["subleading_w_rms"].append(float("nan"))
 
+                            d["pair_invariant_mass"].append(float("nan"))
+
                 reader.close()
 
-                print(f"Total tracks for file {ifile}: {total_tracks}")
+                #print(f"Cumulative tracks at file {ifile}: {total_tracks}")
                 
                 if (ifile - start + 1) % SAVE_EVERY == 0:
                     with CACHE.open("wb") as f:
@@ -495,8 +535,8 @@ if stats is None:
         vb_percent = (track_vb / track_pass_eta) * 100
         ib_percent = (track_ib / track_pass_eta) * 100
         ob_percent = (track_ob / track_pass_eta) * 100
-        highpt_percent = (track_pass_10tev / track_ob) * 100
-        rms_percent = (track_pass_w_rms / track_pass_10tev) * 100
+        # highpt_percent = (track_pass_10tev / track_ob) * 100
+        # rms_percent = (track_pass_w_rms / track_pass_10tev) * 100
         overc_percent = (over_c / track_pass_chi2) * 100
 
         print(f"{window} window stats:")
@@ -506,8 +546,8 @@ if stats is None:
         print(f"Vertex cut: {track_vb} / {track_pass_eta} -> {vb_percent:.2f}%")
         print(f"Inner cut: {track_ib} / {track_pass_eta} -> {ib_percent:.2f}%")
         print(f"Outer cut: {track_ob} / {track_pass_eta} -> {ob_percent:.2f}%")
-        print(f"Number of tracks passing high pT cut (under 10TeV pT): {track_pass_10tev} (/ tracks passing ob -> {highpt_percent:.2f}%)")
-        print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms} (/ tracks passing high pT -> {rms_percent:.2f}%)")
+        # print(f"Number of tracks passing high pT cut (under 10TeV pT): {track_pass_10tev} (/ tracks passing ob -> {highpt_percent:.2f}%)")
+        # print(f"Number of tracks passing 1.6 weighted rms max cut: {track_pass_w_rms} (/ tracks passing high pT -> {rms_percent:.2f}%)")
         print(f"Number of tracks rejected because NaN value: {nan_value}")
         print("\n")
         print(f"num tracks that have 3 sigma hit: {tracks_w_outlier} (after eta and chi2 cuts)")
@@ -522,54 +562,6 @@ with CACHE.open("wb") as f:
 print("Saved cache successfully.")
 
 
-def plot_cut_multiplicity(stats, window, option, req="vb", max_tracks=30, pdf=None):
-    d = stats[window][req][option]
-
-    fig, ax = plt.subplots(figsize=(7,5))
-
-    curves = [
-        ("n_pass_pt",   r"$p_T > 800$ GeV"),
-        ("n_pass_mass", r"Mass > 500 GeV"),
-        ("n_pass_beta", r"$\beta < 0.99$"),
-        ("n_pass_all",  "All cuts"),
-    ]
-
-    bins = np.arange(-0.5, max_tracks + 1.5, 1)
-
-    for key, label in curves:
-        arr = np.array(d[key])
-        arr = np.clip(arr, 0, max_tracks)  # overflow protection
-
-        ax.hist(arr,
-                bins=bins,
-                histtype="step",
-                linewidth=2,
-                label=label)
-
-    ax.set_xlabel("Number of Reconstructed Tracks Passing Cut", fontsize=13)
-    ax.set_ylabel("Events", fontsize=13)
-    ax.set_xlim(-0.5, max_tracks)
-    ax.grid(alpha=0.25)
-    ax.legend(frameon=False)
-    ax.set_title(f"{window} window — {option} — {req.upper()} tracks")
-
-    plt.tight_layout()
-
-    # Save to PDF if a PdfPages object is provided
-    if pdf is not None:
-        pdf.savefig(fig)
-        plt.close(fig)  # close the figure so it doesn't display
-    else:
-        plt.show()  # fallback for interactive display
-
-# Usage with PdfPages
-# with PdfPages("pdf/event_cut_plots.pdf") as pdf:
-#     for window in windows:
-#         for option in bib_options:
-#             for req in ["vb", "ib", "ob"]:
-#                 plot_cut_multiplicity(stats, window, option, req=req, pdf=pdf)
-
-
 def _event_norm_hist(ax, arr, N_events, bins, label):
     x = np.asarray(arr, dtype=float)
     x = x[np.isfinite(x)]
@@ -580,8 +572,7 @@ def _event_norm_hist(ax, arr, N_events, bins, label):
     return x.size / N_events  # fraction of events with a finite value
 
 
-def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None, 
-                  tick_major=18, tick_minor=16):
+def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None, tick_major=18, tick_minor=16):
     if bins_cfg is None:
         bins_cfg = {
             "pT": np.linspace(0, 3300, 60),
@@ -620,20 +611,14 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
     for key, lead_key, sub_key, xlabel in features:
         fig, ax = plt.subplots(figsize=(8,6))
 
-        frac_lead = _event_norm_hist(ax, d.get(lead_key, []), 
-                                     N_events, bins_cfg[key],
-                                     label="Leading")
-        frac_sub = _event_norm_hist(ax, d.get(sub_key, []), 
-                                    N_events, bins_cfg[key],
-                                    label="Subleading")
+        frac_lead = _event_norm_hist(ax, d.get(lead_key, []), N_events, bins_cfg[key], label="Leading")
+        frac_sub = _event_norm_hist(ax, d.get(sub_key, []), N_events, bins_cfg[key], label="Subleading")
                
         ax.set_xlabel(xlabel, fontsize=20)
         ax.set_ylabel("Fraction of events per bin", fontsize=20)
 
-        ax.tick_params(axis="both", which="major",
-                        labelsize=tick_major, length=6, width=1.5)
-        ax.tick_params(axis="both", which="minor",
-                        labelsize=tick_minor, length=4, width=1.0)
+        ax.tick_params(axis="both", which="major", labelsize=tick_major, length=6, width=1.5)
+        ax.tick_params(axis="both", which="minor", labelsize=tick_minor, length=4, width=1.0)
 
         if key in xlims_cfg and xlims_cfg[key] is not None:
             ax.set_xlim(*xlims_cfg[key])
@@ -641,18 +626,12 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
         ax.grid(True, alpha=0.2)
         ax.legend(frameon=False, fontsize=13, loc="upper right")
 
-        ax.text(0.02, 0.98, "Muon Collider",
-                ha="left", va="top", transform=ax.transAxes,
-                fontsize=20, fontweight="bold", style="italic")
-        ax.text(0.02, 0.93, f"BIB, {option}, {window}, req={req}",
-                ha="left", va="top", transform=ax.transAxes, fontsize=14)
-        ax.text(0.02, 0.89, f"N_events={N_events}",
-                ha="left", va="top", transform=ax.transAxes, fontsize=14)
+        ax.text(0.02, 0.98, "Muon Collider", ha="left", va="top", transform=ax.transAxes, fontsize=20, fontweight="bold", style="italic")
+        ax.text(0.02, 0.93, f"BIB, {option}, {window}, req={req}", ha="left", va="top", transform=ax.transAxes, fontsize=14)
+        ax.text(0.02, 0.89, f"N_events={N_events}", ha="left", va="top", transform=ax.transAxes, fontsize=14)
 
-        ax.text(0.98, 0.02,
-                f"Frac(events w/ leading) ~ {frac_lead:.3f}\n"
-                f"Frac(events w/ subleading) ~ {frac_sub:.3f}",
-                ha="right", va="bottom", transform=ax.transAxes, fontsize=12)
+        ax.text(0.98, 0.02, f"Frac(events w/ leading) ~ {frac_lead:.3f}\n"
+                f"Frac(events w/ subleading) ~ {frac_sub:.3f}", ha="right", va="bottom", transform=ax.transAxes, fontsize=12)
 
         fig.tight_layout()
         pdf.savefig(fig)
@@ -660,8 +639,7 @@ def plot_lead_sub(stats, window, option, req, bins_cfg=None, xlims_cfg=None,
 
 
 
-def plot_log_lead_sub(stats, window, option, req, 
-                  tick_major=18, tick_minor=16):
+def plot_log_lead_sub(stats, window, option, req, tick_major=18, tick_minor=16):
     
     features = [
         ("pT", "leading_pT", "subleading_pT", r"$p_T$ [GeV] - log scale"),
@@ -674,7 +652,7 @@ def plot_log_lead_sub(stats, window, option, req,
     ]
 
     log_bins_cfg = {
-        "pT": np.logspace(0, 5, 60),      # 1 → 100000
+        "pT": np.logspace(0, 5, 60),      
         "mass": np.logspace(0, 5, 60),
         "beta": np.linspace(0.4, 1.02, 60),  # stays linear
         "d0": np.linspace(-5, 5, 60),
@@ -692,13 +670,9 @@ def plot_log_lead_sub(stats, window, option, req,
 
         bins = log_bins_cfg[key]
 
-        frac_lead = _event_norm_hist(ax, d.get(lead_key, []),
-                                    N_events, bins,
-                                    label="Leading")
+        frac_lead = _event_norm_hist(ax, d.get(lead_key, []), N_events, bins, label="Leading")
 
-        frac_sub = _event_norm_hist(ax, d.get(sub_key, []),
-                                    N_events, bins,
-                                    label="Subleading")
+        frac_sub = _event_norm_hist(ax, d.get(sub_key, []), N_events, bins, label="Subleading")
                
         if key == "d0" or key == "z0":
             ax.set_xlabel("symlog")
@@ -709,40 +683,147 @@ def plot_log_lead_sub(stats, window, option, req,
         ax.set_xlabel(xlabel, fontsize=20)
         ax.set_ylabel("Fraction of events per bin", fontsize=20)
 
-        ax.tick_params(axis="both", which="major",
-                        labelsize=tick_major, length=6, width=1.5)
-        ax.tick_params(axis="both", which="minor",
-                        labelsize=tick_minor, length=4, width=1.0)
+        ax.tick_params(axis="both", which="major", labelsize=tick_major, length=6, width=1.5)
+        ax.tick_params(axis="both", which="minor", labelsize=tick_minor, length=4, width=1.0)
 
         ax.grid(True, alpha=0.2)
         ax.legend(frameon=False, fontsize=13, loc="upper right")
 
-        ax.text(0.02, 0.98, "Muon Collider",
-                ha="left", va="top", transform=ax.transAxes,
-                fontsize=20, fontweight="bold", style="italic")
-        ax.text(0.02, 0.93, f"BIB, {option}, {window}, req={req}",
-                ha="left", va="top", transform=ax.transAxes, fontsize=14)
-        ax.text(0.02, 0.89, f"N_events={N_events}",
-                ha="left", va="top", transform=ax.transAxes, fontsize=14)
+        ax.text(
+            0.02, 0.98, 
+            "Muon Collider", 
+            ha="left", 
+            va="top", 
+            transform=ax.transAxes, 
+            fontsize=20, 
+            fontweight="bold", 
+            style="italic"
+        )
+        ax.text(
+            0.02, 0.93, 
+            f"BIB, {option}, {window}, req={req}", 
+            ha="left", va="top", 
+            transform=ax.transAxes, 
+            fontsize=14
+        )
+        ax.text(
+            0.02, 0.89, 
+            f"N_events={N_events}", 
+            ha="left", va="top", 
+            transform=ax.transAxes, 
+            fontsize=14
+        )
 
-        ax.text(0.98, 0.02,
-                f"Frac(events w/ leading) ~ {frac_lead:.3f}\n"
-                f"Frac(events w/ subleading) ~ {frac_sub:.3f}",
-                ha="right", va="bottom", transform=ax.transAxes, fontsize=12)
+        ax.text(
+            0.98, 0.02, 
+            f"Frac(events w/ leading) ~ {frac_lead:.3f}\n"
+            f"Frac(events w/ subleading) ~ {frac_sub:.3f}", 
+            ha="right", 
+            va="bottom", 
+            transform=ax.transAxes, 
+            fontsize=12
+        )
 
         fig.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)
 
 
+def plot_pair_invariant_mass(stats, window, option, req, log_scale=False, tick_major=18, tick_minor=16):
+    d = stats[window][req][option]
+    N_events = int(d.get("n_events", 0))
+
+    pair_masses = d.get("pair_invariant_mass", [])
+
+    if log_scale:
+        bins = np.logspace(0, 5, 60)  # 1 GeV to 100 TeV
+    else:
+        bins = np.linspace(0, 20000, 80)  # 0 to 20 TeV
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    frac_pair = _event_norm_hist(ax, pair_masses, N_events, bins, label="Leading + subleading tracks")
+
+    if log_scale:
+        ax.set_xscale("log")
+        xlabel = r"$m_{\mathrm{lead,sublead}}$ [GeV] - log scale"
+    else:
+        ax.set_xlim(0, 1000)
+        xlabel = r"$m_{\mathrm{lead,sublead}}$ [GeV]"
+
+    ax.set_xlabel(xlabel, fontsize=20)
+    ax.set_ylabel("Fraction of events per bin", fontsize=20)
+
+    ax.tick_params(axis="both", which="major", labelsize=tick_major, length=6, width=1.5)
+    ax.tick_params(axis="both", which="minor", labelsize=tick_minor, length=4, width=1.0)
+
+    ax.grid(True, alpha=0.2)
+    ax.legend(frameon=False, fontsize=13, loc="upper right")
+
+    ax.text(0.02, 0.98,
+        "Muon Collider",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=20,
+        fontweight="bold",
+        style="italic"
+    )
+
+    ax.text(
+        0.02, 0.93,
+        f"BIB, {option}, {window}, req={req}",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=14
+    )
+
+    ax.text(
+        0.02, 0.89,
+        f"N_events={N_events}",
+        ha="left",
+        va="top",
+        transform=ax.transAxes,
+        fontsize=14
+    )
+
+    ax.text(
+        0.98, 0.02,
+        f"Frac(events w/ pair) ~ {frac_pair:.3f}",
+        ha="right",
+        va="bottom",
+        transform=ax.transAxes,
+        fontsize=12
+    )
+
+    fig.tight_layout()
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+# with PdfPages("pdf/lead_sub_plots.pdf") as pdf:
+#     for window in windows:
+#         for option in bib_options:
+#             for req in ["ob"]:
+#                 plot_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
+#                 plot_log_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
+#                 print("Saved event-normalized leading/subleading plots to pdf/lead_sub_plots.pdf")
+
 with PdfPages("pdf/lead_sub_plots.pdf") as pdf:
     for window in windows:
         for option in bib_options:
             for req in ["ob"]:
-                plot_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
-                plot_log_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
-                print("Saved event-normalized leading/subleading plots to pdf/lead_sub_plots.pdf")
 
+                plot_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
+
+                plot_log_lead_sub(stats=stats, window=window, option=option, req=req, tick_major=20, tick_minor=18)
+
+                plot_pair_invariant_mass(stats=stats,window=window, option=option, req=req, log_scale=False, tick_major=20, tick_minor=18)
+
+                plot_pair_invariant_mass(stats=stats, window=window, option=option, req=req, log_scale=True, tick_major=20, tick_minor=18)
+
+    print("Saved event-normalized leading/subleading and invariant-mass plots to pdf/lead_sub_plots.pdf")
 
 
  
@@ -751,7 +832,7 @@ import pickle
 with open(CACHE, "rb") as f:
     stats = pickle.load(f)
 
-d = stats["loose"]["ob"]["bib"]
+d = stats["loose"]["ob"]["10_bib"]
 
 import numpy as np
 
